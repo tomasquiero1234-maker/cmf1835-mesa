@@ -7,7 +7,7 @@ contrapartes por RUT.
 ## Instalación
 
 ```bash
-cd /Users/tomasquiero/Claude/cmf1835
+cd "/Users/tomasquiero/Claude/Copia de cmf1835"
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 ```
@@ -65,8 +65,43 @@ Se edita el YAML. No se toca Python. El motor valida al cargar que los campos
 cubran el registro sin solapes ni desbordes, y falla al arrancar si la
 transcripción tiene un error — no tres meses después mirando un nocional raro.
 
-## Próximos módulos
+## Warehouse y analitica
 
-- `warehouse/` — carga a Parquet particionado + DuckDB
-- `analytics/flows.py` — diff mes contra mes por folio: new / unwind / roll
-- `app/dashboard.py` — Streamlit
+```bash
+# serie UF (una vez; el validador la lee de disco, nunca por red)
+python -m utils.fetch_uf --desde 2023
+
+# Parquet particionado por periodo + esquema estrella en DuckDB
+python -m warehouse.loader --data "../Archivos completos ZIP CMF"
+
+# diff mes contra mes sobre los cinco productos de derivados
+python -m analytics.flows --todos
+python -m analytics.flows --sql --periodo 202606   # imprime el SQL
+```
+
+Carga medida sobre 21 periodos (202412-202608):
+
+| objeto | filas |
+|---|---|
+| fact_derivado | 83.531 |
+| fact_renta_fija | 2.080.296 |
+| fact_garantia | 6.147 |
+| fact_cuarentena | 16.940 |
+| dim_contraparte | 45 |
+| dim_instrumento | 100.731 |
+
+## Dos generaciones de layout
+
+La CMF cambio los largos de registro en 202412: antes B.1 median 930 y B.7
+median 489, y B.14 no existia. Este YAML describe **solo** la generacion
+nueva. El motor detecta el desajuste por largo y deja esos registros sin
+campos en vez de rellenarlos con nulos; son 1.225.162 registros de
+202312-202411 que quedan fuera del warehouse a proposito.
+
+## Proximos modulos
+
+- `app/dashboard.py` - Streamlit: Whitespace Map, Price Discovery OTC,
+  Roll-Off Calendar, Gap de moneda/duration, Client Card
+- Anexo B.10 (tablas de desarrollo): cerraria la identidad nominal/vigente
+  de renta fija, hoy no evaluable
+- Layout de la generacion vieja, para recuperar los 12 meses de 202312-202411
