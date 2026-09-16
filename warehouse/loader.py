@@ -1,0 +1,548 @@
+"""
+warehouse.loader
+================
+
+Materializa la cartera en Parquet particionado por periodo y monta un
+esquema estrella encima con DuckDB.
+
+Modelo
+------
+Dimensiones conformadas (compartidas por todos los hechos):
+
+    dim_periodo       AAAAMM, fecha de cierre y UF de ese cierre
+    dim_compania      la aseguradora que informa
+    dim_contraparte   contraparte resuelta, con su grupo economico
+    dim_instrumento   el papel (nemotecnico, tipo, moneda, emisor)
+
+Hechos, uno por grano:
+
+    fact_derivado     un registro de B.7 (opciones, forwards, futuros,
+                      swaps y pactos: los cinco tipos, no solo forwards)
+    fact_renta_fija   un registro de detalle de B.1
+    fact_garantia     un registro de detalle de B.14
+    fact_cuarentena   lo que no cerro, con su linea cruda
+
+Bitemporalidad
+--------------
+La CMF republica: el mismo periodo puede venir dos veces con contenido
+distinto -- 202608 existe en tres versiones, de 96, 209 y 240 archivos. Por
+eso cada fila lleva DOS tiempos:
+
+    periodo_informacion   el mes al que se refiere el dato
+    fecha_descarga        cuando obtuvimos ESA publicacion
+
+y ademas ``zip_origen``, que identifica la publicacion concreta. Con eso se
+puede preguntar "que sabiamos de junio el 15 de julio" sin que una
+republicacion posterior reescriba la historia. Las vistas ``v_*`` se quedan
+con la ultima publicacion de cada periodo, que es lo que uno quiere el 99%
+del tiempo; los hechos crudos conservan todo.
+
+Uso
+---
+    python -m warehouse.loader --data "/ruta/a/los/ZIP"
+    python -m warehouse.loader --data ./zips --periodo 202608
+    python -m warehouse.loader --data ./zips --out ./warehouse/data
+"""
+
+from __future__ import annotations
+
+import argparse
+import datetime as _dt
+import logging
+import re
+import sys
+import zipfile
+from decimal import Decimal, InvalidOperation
+from pathlib import Path
+from typing import Any, Iterable, Iterator, Mapping
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from parse.engine import FixedWidthEngine, ParsedRecord, UnknownFileTypeError
+from validate.arithmetic import ArithmeticValidator, Verdict
+from normalize.entities import EntityResolver
+
+_LOG = logging.getLogger("cmf1835.warehouse")
+
+LAYOUTS = ROOT / "config" / "layouts" / "cmf_v2024.yaml"
+ENTITIES = ROOT / "config" / "entities.yaml"
+UF_JSON = ROOT / "config" / "series" / "uf.json"
+DEFAULT_OUT = ROOT / "warehouse" / "data"
+
+#: Nombre legible de cada tipo de registro de B.7. El grano de fact_derivado
+#: es un registro de CUALQUIERA de estos cinco: la mesa opera todos.
+PRODUCTO = {
+    "2": "OPCION",
+    "3": "FORWARD",
+    "4": "FUTURO",
+    "5": "SWAP",
+    "6": "PACTO",
+}
+
+#: De donde sale el nocional en cada producto. La CMF no usa un campo unico,
+#: asi que se declara la fuente por tipo y se guarda en `nocional_origen`:
+#: un nocional sin procedencia es un numero que nadie puede auditar.
+_NOCIONAL: dict[str, tuple[str, ...]] = {
+    "2": ("MONTO(activo)", "MONTO(pasivo)"),
+    "3": ("NOCIONAL_POSICION_LARGA(monto)", "NOCIONAL_POSICION_CORTA(monto)"),
+    "4": ("NOCIONAL_POSICION_LARGA(monto)", "NOCIONAL_POSICION_CORTA(monto)"),
+    "5": ("NOCIONAL_POSICION_LARGA(monto)", "NOCIONAL_POSICION_CORTA(monto)"),
+    "6": ("ACTIVO_OBJETO(monto)(M$)",),
+}
+
+_MTM = {
+    "activo": ("MONTO(activo)",),
+    "pasivo": ("MONTO(pasivo)",),
+}
+
+
+# ---------------------------------------------------------------------------
+# helpers
+# ---------------------------------------------------------------------------
+
+def _num(v: Any) -> float | None:
+    """Pasa a float para Parquet. Decimal es exacto pero no es un tipo columnar."""
+    if v is None or isinstance(v, bool):
+        return None
+    if isinstance(v, (int, float)):
+        return float(v)
+    if isinstance(v, Decimal):
+        return float(v)
+    try:
+        return float(str(v).strip().replace(",", ""))
+    except (ValueError, InvalidOperation):
+        return None
+
+
+def _txt(v: Any) -> str | None:
+    if v is None:
+        return None
+    s = str(v).strip()
+    return s or None
+
+
+def _first(f: Mapping[str, Any], nombres: Iterable[str]) -> tuple[float | None, str | None]:
+    """Primer campo con valor, junto con el nombre del que salio."""
+    for n in nombres:
+        v = _num(f.get(n))
+        if v is not None and v != 0:
+            return v, n
+    for n in nombres:                      # si todos son cero, igual se reporta
+        if f.get(n) is not None:
+            return _num(f.get(n)), n
+    return None, None
+
+
+def _fin_de_mes(periodo: int) -> _dt.date:
+    a, m = divmod(int(periodo), 100)
+    return (_dt.date(a + (m == 12), (m % 12) + 1, 1) - _dt.timedelta(days=1))
+
+
+def _uf_por_periodo() -> dict[int, tuple[float, str]]:
+    import json
+    if not UF_JSON.exists():
+        _LOG.warning("Sin serie UF (%s): dim_periodo ira sin valor de UF", UF_JSON)
+        return {}
+    doc = json.loads(UF_JSON.read_text(encoding="utf-8"))
+    out: dict[int, tuple[float, str]] = {}
+    for per, d in (doc.get("cierre_mes") or {}).items():
+        if isinstance(d, dict):
+            out[int(per)] = (float(d["valor"]), str(d["fecha"]))
+        else:
+            out[int(per)] = (float(d), "")
+    return out
+
+
+# ---------------------------------------------------------------------------
+# construccion de filas
+# ---------------------------------------------------------------------------
+
+class RowBuilder:
+    """Convierte un ParsedRecord en la fila del hecho que le corresponde."""
+
+    def __init__(self, resolver: EntityResolver, validator: ArithmeticValidator) -> None:
+        self.resolver = resolver
+        self.validator = validator
+
+    def _base(self, rec: ParsedRecord, zip_origen: str, descargado: str) -> dict[str, Any]:
+        return {
+            "periodo_informacion": rec.periodo,
+            "fecha_descarga": descargado,
+            "zip_origen": zip_origen,
+            "source_file": rec.source_file,
+            "line_no": rec.line_no,
+            "rut_compania": rec.rut_compania,
+        }
+
+    def _contraparte(self, f: Mapping[str, Any]) -> dict[str, Any]:
+        r = self.resolver.resolve(
+            rut=f.get("RUT_CONTRAPARTE_NACIONAL"),
+            dv=f.get("DV_CONTRAPARTE_NACIONAL"),
+            name=f.get("NOMBRE") or f.get("NOMBRE_CONTRAPARTE_GARANTIA"),
+            identifier=f.get("LEI_CONTRAPARTE_EXTRANJERA"),
+        )
+        row = r.to_row()
+        row["contraparte_rut"] = _num(f.get("RUT_CONTRAPARTE_NACIONAL"))
+        row["contraparte_lei"] = _txt(f.get("LEI_CONTRAPARTE_EXTRANJERA"))
+        return row
+
+    def derivado(self, rec: ParsedRecord, zip_origen: str, descargado: str,
+                 veredicto: Any) -> dict[str, Any]:
+        f = rec.fields
+        nocional, origen = _first(f, _NOCIONAL.get(rec.record_type, ()))
+        largo, _ = _first(f, ("NOCIONAL_POSICION_LARGA(monto)", "ACTIVO_OBJETO_POSICION_LARGA(monto)"))
+        corto, _ = _first(f, ("NOCIONAL_POSICION_CORTA(monto)", "ACTIVO_OBJETO_POSICION_CORTA(monto)"))
+        row = self._base(rec, zip_origen, descargado)
+        row.update({
+            "producto": PRODUCTO.get(rec.record_type, rec.record_type),
+            "record_type": rec.record_type,
+            "folio_operacion": _txt(f.get("FOLIO_OPERACION")),
+            "item_operacion": _txt(f.get("ITEM_OPERACION")),
+            "tipo_operacion": _txt(f.get("TIPO_OPERACION")),
+            "objetivo_contrato": _txt(f.get("OBJETIVO_CONTRATO")),
+            "fecha_operacion": f.get("FECHA_DE_LA_OPERACION"),
+            "fecha_vencimiento": f.get("FECHA_DE_VENCIMIENTO_DEL_CONTRATO"),
+            "moneda": _txt(f.get("MONEDA") or f.get("MONEDA_POSICION_LARGA")),
+            "moneda_corta": _txt(f.get("MONEDA_POSICION_CORTA")),
+            "nocional_m": nocional,
+            "nocional_origen": origen,
+            "nocional_largo_m": largo,
+            "nocional_corto_m": corto,
+            "mtm_activo_m": _num(f.get("MONTO(activo)")),
+            "mtm_pasivo_m": _num(f.get("MONTO(pasivo)")),
+            "margen_m": _num(f.get("MONTO_ACTIVOS_EN_MARGEN")),
+            "relacionado": _txt(f.get("RELACIONADO")),
+            "nacionalidad_contraparte": _txt(f.get("NACIONALIDAD")),
+            "clasif_valoriz_eeff": _txt(f.get("METOD_CLASIF_VALORIZ_EEFF")),
+            "veredicto": veredicto.verdict.value,
+        })
+        row.update(self._contraparte(f))
+        return row
+
+    def renta_fija(self, rec: ParsedRecord, zip_origen: str, descargado: str,
+                   veredicto: Any) -> dict[str, Any]:
+        f = rec.fields
+        row = self._base(rec, zip_origen, descargado)
+        row.update({
+            "nemotecnico": _txt(f.get("NEMOTECNICO")),
+            "tipo_instrumento": _txt(f.get("TIPO_INSTRUMENTO")),
+            "serie": _txt(f.get("SERIE")),
+            "pais": _txt(f.get("PAIS")),
+            "emisor_rut": _num(f.get("NRO_RUT")),
+            "emisor_dv": _txt(f.get("DIG_RUT")),
+            "unidad_monetaria": _txt(f.get("UNIDAD_MONETARIA")),
+            "valor_nominal": _num(f.get("VALOR_NOMINAL")),
+            "valor_nominal_vigente": _num(f.get("VALOR_NOMINAL_VIGENTE")),
+            "valor_compra": _num(f.get("VALOR_COMPRA")),
+            "valor_comercial_mp": _num(f.get("VALOR_COMERCIAL_MP")),
+            "valor_comercial_um": _num(f.get("VALOR_COMERCIAL_UM")),
+            "valor_final": _num(f.get("VALOR_FINAL_B1")),
+            "tasa_emision": _num(f.get("TASA_EMISION")),
+            "fecha_emision": f.get("FECHA_EMISION"),
+            "fecha_compra": f.get("FECHA_COMPRA"),
+            "fecha_vencimiento": f.get("FECHA_VENCIMIENTO"),
+            "clasif_valoriz_eeff": _txt(f.get("METOD_CLASIF_VALORIZ_EEFF")),
+            "veredicto": veredicto.verdict.value,
+        })
+        return row
+
+    def garantia(self, rec: ParsedRecord, zip_origen: str, descargado: str,
+                 veredicto: Any) -> dict[str, Any]:
+        f = rec.fields
+        row = self._base(rec, zip_origen, descargado)
+        row.update({
+            "folio_operacion": _txt(f.get("FOLIO_OPERACION")),
+            "tipo_garantia": _txt(f.get("TIPO_GARANTIA")),
+            "monto_m": _num(f.get("MONTO") or f.get("MONTO_GARANTIA")),
+            "moneda": _txt(f.get("MONEDA")),
+            "veredicto": veredicto.verdict.value,
+        })
+        row.update(self._contraparte(f))
+        return row
+
+    def cuarentena(self, rec: ParsedRecord, zip_origen: str, descargado: str,
+                   veredicto: Any) -> dict[str, Any]:
+        row = self._base(rec, zip_origen, descargado)
+        row.update({
+            "archivo": rec.letter,
+            "anexo": rec.anexo,
+            "record_type": rec.record_type,
+            "veredicto": veredicto.verdict.value,
+            "motivos": " | ".join(veredicto.reasons)[:2000],
+            # La linea cruda es el punto de esta tabla: sin ella la cuarentena
+            # es una queja, no una pista.
+            "raw": rec.raw,
+        })
+        return row
+
+
+# ---------------------------------------------------------------------------
+# carga
+# ---------------------------------------------------------------------------
+
+class Loader:
+    """Recorre los ZIP y escribe Parquet particionado por periodo."""
+
+    HECHOS = ("fact_derivado", "fact_renta_fija", "fact_garantia", "fact_cuarentena")
+
+    def __init__(self, out: Path, *, layouts: Path = LAYOUTS, entities: Path = ENTITIES) -> None:
+        self.out = out
+        self.engine = FixedWidthEngine.from_yaml(layouts)
+        self.validator = ArithmeticValidator()
+        self.resolver = EntityResolver.from_yaml(entities)
+        self.build = RowBuilder(self.resolver, self.validator)
+        self.contadores: dict[str, int] = {h: 0 for h in self.HECHOS}
+        self.saltados_por_layout = 0
+
+    # -- recorrido -----------------------------------------------------------
+
+    def _zip_rows(self, zpath: Path) -> Iterator[tuple[str, dict[str, Any]]]:
+        descargado = _dt.datetime.fromtimestamp(
+            zpath.stat().st_mtime, _dt.timezone.utc).date().isoformat()
+        with zipfile.ZipFile(zpath) as z:
+            for info in sorted(z.infolist(), key=lambda i: i.filename):
+                if info.is_dir():
+                    continue
+                base = Path(info.filename).name
+                try:
+                    spec, _rut, _per = self.engine.describe(base)
+                except UnknownFileTypeError:
+                    continue
+                if spec.letter not in ("I", "P", "G"):
+                    continue
+                for rec in self.engine.parse_file(base, data=z.read(info)):
+                    # La generacion vieja (pre 202412) tiene otro largo de
+                    # registro. El motor ya la marca; aqui simplemente no entra
+                    # al warehouse: el scope es la generacion nueva.
+                    if rec.fields.get("_layout_mismatch"):
+                        self.saltados_por_layout += 1
+                        continue
+                    tabla_fila = self._fila(rec, zpath.name, descargado)
+                    if tabla_fila:
+                        yield tabla_fila
+
+    def _fila(self, rec: ParsedRecord, zip_origen: str,
+              descargado: str) -> tuple[str, dict[str, Any]] | None:
+        L, t = rec.letter, rec.record_type
+        if L == "P" and t in PRODUCTO:
+            v = self.validator.validate(L, t, rec.fields,
+                                        untrusted=rec.untrusted, periodo=rec.periodo)
+            if v.verdict is Verdict.QUARANTINE:
+                return "fact_cuarentena", self.build.cuarentena(rec, zip_origen, descargado, v)
+            return "fact_derivado", self.build.derivado(rec, zip_origen, descargado, v)
+        if L == "I" and t == "2":
+            v = self.validator.validate(L, t, rec.fields,
+                                        untrusted=rec.untrusted, periodo=rec.periodo)
+            if v.verdict is Verdict.QUARANTINE:
+                return "fact_cuarentena", self.build.cuarentena(rec, zip_origen, descargado, v)
+            return "fact_renta_fija", self.build.renta_fija(rec, zip_origen, descargado, v)
+        if L == "G" and t == "2":
+            v = self.validator.validate(L, t, rec.fields,
+                                        untrusted=rec.untrusted, periodo=rec.periodo)
+            return "fact_garantia", self.build.garantia(rec, zip_origen, descargado, v)
+        return None
+
+    # -- escritura -----------------------------------------------------------
+
+    def cargar(self, zips: list[Path]) -> dict[str, int]:
+        """Escribe un Parquet por (hecho, periodo)."""
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+
+        # {(hecho, periodo): [filas]}. Un mes completo de todas las companias
+        # son ~150k filas: cabe de sobra, y escribir por periodo deja cada
+        # particion en un solo archivo en vez de mil fragmentos.
+        for zp in zips:
+            buffers: dict[tuple[str, int], list[dict[str, Any]]] = {}
+            _LOG.info("--- %s", zp.name)
+            for tabla, fila in self._zip_rows(zp):
+                per = fila.get("periodo_informacion") or 0
+                buffers.setdefault((tabla, per), []).append(fila)
+                self.contadores[tabla] += 1
+            for (tabla, per), filas in sorted(buffers.items()):
+                destino = self.out / tabla / f"periodo={per}"
+                destino.mkdir(parents=True, exist_ok=True)
+                # El nombre lleva el ZIP de origen: dos publicaciones del mismo
+                # periodo conviven en la particion en vez de pisarse.
+                slug = re.sub(r"[^A-Za-z0-9]+", "_", zp.stem).strip("_")
+                pq.write_table(
+                    pa.Table.from_pylist(filas),
+                    destino / f"{slug}.parquet",
+                    compression="zstd",
+                )
+        return dict(self.contadores)
+
+
+# ---------------------------------------------------------------------------
+# esquema estrella en DuckDB
+# ---------------------------------------------------------------------------
+
+DDL = """
+-- ===========================================================================
+--  Esquema estrella sobre el Parquet particionado.
+--  Los hechos son VIEW sobre los archivos: no se duplica un byte y agregar
+--  un periodo nuevo es dejar caer su carpeta, sin recargar nada.
+-- ===========================================================================
+
+CREATE OR REPLACE VIEW raw_derivado   AS SELECT * FROM read_parquet('{root}/fact_derivado/*/*.parquet',   union_by_name=true, hive_partitioning=true);
+CREATE OR REPLACE VIEW raw_renta_fija AS SELECT * FROM read_parquet('{root}/fact_renta_fija/*/*.parquet', union_by_name=true, hive_partitioning=true);
+CREATE OR REPLACE VIEW raw_garantia   AS SELECT * FROM read_parquet('{root}/fact_garantia/*/*.parquet',   union_by_name=true, hive_partitioning=true);
+CREATE OR REPLACE VIEW raw_cuarentena AS SELECT * FROM read_parquet('{root}/fact_cuarentena/*/*.parquet', union_by_name=true, hive_partitioning=true);
+
+-- --- bitemporal ------------------------------------------------------------
+-- Ultima publicacion de cada periodo. La CMF republica (202608 existe en tres
+-- versiones distintas), asi que "el dato de junio" depende de cuando preguntes.
+CREATE OR REPLACE VIEW publicacion_vigente AS
+WITH todas AS (
+    SELECT periodo_informacion, zip_origen, fecha_descarga, COUNT(*) AS filas
+    FROM raw_derivado GROUP BY 1,2,3
+    UNION ALL
+    SELECT periodo_informacion, zip_origen, fecha_descarga, COUNT(*)
+    FROM raw_renta_fija GROUP BY 1,2,3
+)
+SELECT periodo_informacion, zip_origen, fecha_descarga, SUM(filas) AS filas,
+       ROW_NUMBER() OVER (PARTITION BY periodo_informacion
+                          ORDER BY fecha_descarga DESC, SUM(filas) DESC) AS recencia
+FROM todas GROUP BY 1,2,3;
+
+-- --- dimensiones -----------------------------------------------------------
+CREATE OR REPLACE TABLE dim_periodo AS
+SELECT DISTINCT
+    d.periodo_informacion                                   AS periodo,
+    CAST(d.periodo_informacion / 100 AS INTEGER)            AS anio,
+    CAST(d.periodo_informacion % 100 AS INTEGER)            AS mes,
+    LAST_DAY(STRPTIME(CAST(d.periodo_informacion AS VARCHAR) || '01', '%Y%m%d')) AS fecha_cierre,
+    u.uf_cierre,
+    u.uf_fecha
+FROM (SELECT DISTINCT periodo_informacion FROM raw_derivado
+      UNION SELECT DISTINCT periodo_informacion FROM raw_renta_fija) d
+LEFT JOIN uf_cierre_mes u ON u.periodo = d.periodo_informacion;
+
+CREATE OR REPLACE TABLE dim_compania AS
+SELECT rut_compania, MAX(nombre) AS nombre, COUNT(*) AS registros
+FROM (
+    SELECT rut_compania, NULL::VARCHAR AS nombre FROM raw_derivado
+    UNION ALL SELECT rut_compania, NULL FROM raw_renta_fija
+) GROUP BY rut_compania;
+
+CREATE OR REPLACE TABLE dim_contraparte AS
+SELECT
+    contraparte_key,
+    ANY_VALUE(contraparte_nombre)  AS nombre,
+    ANY_VALUE(contraparte_grupo)   AS grupo,
+    ANY_VALUE(contraparte_tipo)    AS tipo,
+    ANY_VALUE(contraparte_pais)    AS pais,
+    ANY_VALUE(resolucion_metodo)   AS metodo,
+    MAX(resolucion_confianza)      AS confianza,
+    COUNT(*)                       AS operaciones
+FROM (SELECT * FROM raw_derivado UNION ALL BY NAME SELECT * FROM raw_garantia)
+GROUP BY contraparte_key;
+
+CREATE OR REPLACE TABLE dim_instrumento AS
+SELECT
+    nemotecnico,
+    ANY_VALUE(tipo_instrumento) AS tipo_instrumento,
+    ANY_VALUE(unidad_monetaria) AS unidad_monetaria,
+    ANY_VALUE(emisor_rut)       AS emisor_rut,
+    ANY_VALUE(pais)             AS pais,
+    MAX(fecha_vencimiento)      AS fecha_vencimiento,
+    COUNT(*)                    AS observaciones
+FROM raw_renta_fija
+WHERE nemotecnico IS NOT NULL
+GROUP BY nemotecnico;
+
+-- --- hechos vigentes -------------------------------------------------------
+-- Lo que uno quiere el 99% del tiempo: cada periodo en su ultima publicacion.
+CREATE OR REPLACE VIEW fact_derivado AS
+SELECT r.* FROM raw_derivado r
+JOIN publicacion_vigente v
+  ON v.periodo_informacion = r.periodo_informacion
+ AND v.zip_origen = r.zip_origen AND v.recencia = 1;
+
+CREATE OR REPLACE VIEW fact_renta_fija AS
+SELECT r.* FROM raw_renta_fija r
+JOIN publicacion_vigente v
+  ON v.periodo_informacion = r.periodo_informacion
+ AND v.zip_origen = r.zip_origen AND v.recencia = 1;
+
+CREATE OR REPLACE VIEW fact_garantia   AS SELECT * FROM raw_garantia;
+CREATE OR REPLACE VIEW fact_cuarentena AS SELECT * FROM raw_cuarentena;
+"""
+
+
+def construir_duckdb(out: Path, db: Path) -> dict[str, int]:
+    """Crea el esquema estrella sobre el Parquet ya escrito."""
+    import duckdb
+    import json
+
+    con = duckdb.connect(str(db))
+    # La UF entra como tabla porque dim_periodo la necesita y es chica.
+    uf = _uf_por_periodo()
+    con.execute("CREATE OR REPLACE TABLE uf_cierre_mes "
+                "(periodo INTEGER, uf_cierre DOUBLE, uf_fecha VARCHAR)")
+    if uf:
+        con.executemany("INSERT INTO uf_cierre_mes VALUES (?, ?, ?)",
+                        [(p, v, f) for p, (v, f) in sorted(uf.items())])
+
+    con.execute(DDL.format(root=out.as_posix()))
+
+    conteos: dict[str, int] = {}
+    for t in ("fact_derivado", "fact_renta_fija", "fact_garantia", "fact_cuarentena",
+              "dim_periodo", "dim_compania", "dim_contraparte", "dim_instrumento"):
+        try:
+            conteos[t] = con.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
+        except Exception as e:                      # noqa: BLE001
+            _LOG.error("no se pudo contar %s: %s", t, e)
+            conteos[t] = -1
+    con.close()
+    return conteos
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+def main(argv: list[str] | None = None) -> int:
+    p = argparse.ArgumentParser(description="Carga la cartera a Parquet + DuckDB.")
+    p.add_argument("--data", type=Path, required=True, help="Carpeta con los ZIP mensuales.")
+    p.add_argument("--out", type=Path, default=DEFAULT_OUT, help="Raiz del warehouse.")
+    p.add_argument("--periodo", help="Filtra un periodo AAAAMM.")
+    p.add_argument("--db", type=Path, default=None, help="Ruta del archivo DuckDB.")
+    p.add_argument("--solo-esquema", action="store_true",
+                   help="No recarga el Parquet; solo reconstruye el esquema.")
+    p.add_argument("-v", "--verbose", action="store_true")
+    a = p.parse_args(argv)
+
+    logging.basicConfig(level=logging.INFO if a.verbose else logging.WARNING,
+                        format="  [%(levelname)s] %(message)s")
+    db = a.db or (a.out / "cmf1835.duckdb")
+    a.out.mkdir(parents=True, exist_ok=True)
+
+    if not a.solo_esquema:
+        zips = sorted(z for z in a.data.rglob("*.zip") if z.is_file())
+        if a.periodo:
+            zips = [z for z in zips if a.periodo in z.name]
+        if not zips:
+            print(f"No hay ZIP en {a.data}", file=sys.stderr)
+            return 2
+        print(f"Cargando {len(zips)} ZIP a {a.out}")
+        loader = Loader(a.out)
+        conteos = loader.cargar(zips)
+        print("\nFilas escritas por hecho:")
+        for t, n in conteos.items():
+            print(f"   {t:18} {n:>12,}")
+        if loader.saltados_por_layout:
+            print(f"   {'(generacion vieja)':18} {loader.saltados_por_layout:>12,} saltados")
+
+    print(f"\nConstruyendo esquema estrella en {db}")
+    conteos = construir_duckdb(a.out, db)
+    print("\nObjetos del warehouse:")
+    for t, n in conteos.items():
+        print(f"   {t:18} {n:>12,}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
