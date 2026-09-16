@@ -1,0 +1,168 @@
+# =============================================================================
+#  Catalogo de entidades -- contrapartes de derivados y garantias
+# =============================================================================
+#  Se versiona en git: una fusion bancaria reescribe retroactivamente las
+#  series historicas y hay que poder auditar cuando se aplico el cambio.
+#
+#  PROCEDENCIA
+#    Los RUT y los LEI de este archivo NO estan escritos a mano: salen de
+#    recorrer los 99.190 registros de derivados de la generacion nueva
+#    (202412-202608) y quedarse con los pares (identificador, nombre) que
+#    aparecen de verdad. Los 25 RUT nacionales pasan modulo 11; los 25 LEI
+#    son los que informan las propias companias.
+#
+#  MATRIZ Y FILIAL
+#    Los nodos de grupo (SANTANDER, SCOTIABANK, ITAU, ...) no llevan RUT ni
+#    LEI propios: existen solo para que `group_key` consolide el riesgo. El
+#    banco, su corredora de bolsa y la matriz del exterior son contrapartes
+#    distintas para liquidar y la misma para medir exposicion.
+#
+#  LO QUE NO ESTA
+#    El RUT "2-7" aparece 2 veces asociado a BARCLAYS CAPITAL. Pasa modulo 11
+#    por casualidad aritmetica, pero no es un RUT: es relleno. No se agrega,
+#    y esos 2 registros quedan sin resolver a proposito.
+# =============================================================================
+entities:
+
+  # --- Grupo Santander -------------------------------------------------------
+  - {key: SANTANDER,    name: "Grupo Santander", kind: banco, country: ES}
+  - {key: SANTANDER_CL, name: "Banco Santander-Chile", parent: SANTANDER, kind: banco, country: CL,
+     ruts: [97036000, 97015000, 97039000],
+     aliases: [BANCO SANTANDER CHILE, "BANCO SANTANDER-CHILE", SANTANDER CHILE, BANCO DE SANTANDER]}
+  - {key: SANTANDER_CB, name: "Santander Corredores de Bolsa Ltda.", parent: SANTANDER, kind: corredora, country: CL,
+     ruts: [96683200], aliases: [SANTANDER CORREDORES DE BOLSA LIMITADA, SANTANDER CORREDORES DE BOLSA]}
+  - {key: SANTANDER_ES, name: "Banco Santander S.A. (Madrid)", parent: SANTANDER, kind: banco, country: ES,
+     identifiers: [5493006QMFDDMYWIAM13],
+     aliases: [BANCO SANTANDER MADRID, BANCO SANTANDER ESPANA]}
+
+  # --- Grupo Scotiabank / Bank of Nova Scotia --------------------------------
+  - {key: SCOTIABANK,    name: "Grupo Scotiabank", kind: banco, country: CA}
+  - {key: SCOTIABANK_CL, name: "Scotiabank Chile", parent: SCOTIABANK, kind: banco, country: CL,
+     ruts: [97018000], aliases: [SCOTIABANK CHILE, BANCO SCOTIABANK, SCOTIABANK AZUL, SCOTIABANK]}
+  - {key: SCOTIA_CB,     name: "Scotia Corredora de Bolsa Chile Ltda.", parent: SCOTIABANK, kind: corredora, country: CL,
+     ruts: [96535720], aliases: [SCOTIA CORREDORA DE BOLSA CHILE LIMITADA, SCOTIA CORREDORA DE BOLSA]}
+  - {key: SCOTIA_BNS,    name: "The Bank of Nova Scotia", parent: SCOTIABANK, kind: banco, country: CA,
+     identifiers: [213800CG3COJ5V9EUX29, L3I9ZG2KFGXZ61BMYR72],
+     aliases: [BANK OF NOVA SCOTIA, THE BANK OF NOVA SCOTIA]}
+
+  # --- Grupo Itau ------------------------------------------------------------
+  - {key: ITAU,           name: "Grupo Itau", kind: banco, country: BR}
+  - {key: ITAU_CORPBANCA, name: "Itau Corpbanca", parent: ITAU, kind: banco, country: CL,
+     ruts: [97023000], aliases: [ITAU CORPBANCA, "BANCO ITAU-CORPBANCA", BANCO ITAU CORPBANCA, CORPBANCA]}
+  - {key: ITAU_CL,        name: "Banco Itau Chile", parent: ITAU, kind: banco, country: CL,
+     ruts: [76645030], aliases: [BANCO ITAU CHILE, ITAU CHILE]}
+  - {key: ITAU_CB,        name: "Itau Corredores de Bolsa S.A.", parent: ITAU, kind: corredora, country: CL,
+     ruts: [96665450], aliases: [ITAU CORREDORES DE BOLSA]}
+
+  # --- Grupo Banco de Chile --------------------------------------------------
+  - {key: BCHILE,      name: "Grupo Banco de Chile", kind: banco, country: CL}
+  - {key: BCHILE_BCO,  name: "Banco de Chile", parent: BCHILE, kind: banco, country: CL,
+     ruts: [97004000], aliases: [BANCO DE CHILE]}
+  - {key: BANCHILE_CB, name: "Banchile Corredores de Bolsa S.A.", parent: BCHILE, kind: corredora, country: CL,
+     ruts: [96571220], aliases: [BANCHILE CORREDORES DE BOLSA S, BANCHILE CORREDORES DE BOLSA]}
+
+  # --- Grupo BCI -------------------------------------------------------------
+  - {key: BCI,      name: "Grupo BCI", kind: banco, country: CL}
+  - {key: BCI_BCO,  name: "Banco de Credito e Inversiones", parent: BCI, kind: banco, country: CL,
+     ruts: [97006000], aliases: [BANCO BCI, BCI, BANCO DE CREDITO E INVERSIONES]}
+  - {key: BCI_VIDA, name: "BCI Seguros Vida S.A.", parent: BCI, kind: aseguradora, country: CL,
+     ruts: [96573600], aliases: [BCIVIDA]}
+
+  # --- Grupo BBVA ------------------------------------------------------------
+  - {key: BBVA,    name: "Grupo BBVA", kind: banco, country: ES}
+  - {key: BBVA_CL, name: "Banco BBVA Chile", parent: BBVA, kind: banco, country: CL,
+     ruts: [97032000], aliases: [BANCO BBVA CHILE, BBVA CHILE]}
+  # "BBVA ESPA#A" y "BBVA ESPA A" son la misma entidad: tres informantes
+  # escriben la enie de tres formas distintas en los bytes del archivo.
+  - {key: BBVA_ES, name: "Banco Bilbao Vizcaya Argentaria S.A.", parent: BBVA, kind: banco, country: ES,
+     identifiers: [K8MS7FD7N5Z2WQ51AZ71],
+     aliases: [BANCO BBVA ESPANA, "BBVA ESPA#A", BBVA ESPANA, BANCO BILBAO VIZCAYA ARGENTARIA]}
+
+  # --- Grupo JP Morgan -------------------------------------------------------
+  - {key: JPMORGAN, name: "Grupo JP Morgan", kind: banco, country: US}
+  - {key: JPM_CL,   name: "Banco JP Morgan Chase (Agencia Chile)", parent: JPMORGAN, kind: banco, country: CL,
+     ruts: [97043000], aliases: ["BCO. JP MORGAN CHASE", JP MORGAN CHASE BANK N A AGENCIA CHILE, "JP MORGAN CHASE BANK N.A. (AGENCIA CHILE)"]}
+  - {key: JPM_US,   name: "JPMorgan Chase Bank N.A.", parent: JPMORGAN, kind: banco, country: US,
+     identifiers: [7H6GLXDRUGQFU57RNE97, 549300MQDUNHX6LKIG35],
+     aliases: [JP MORGAN BANK, "JP MORGAN CHASE BANK N.A - NEW YORK", JP MORGAN CHASE BANK NATIONAL ASSOCIATION]}
+
+  # --- Grupo Goldman Sachs ---------------------------------------------------
+  - {key: GOLDMAN,     name: "Grupo Goldman Sachs", kind: banco, country: US}
+  - {key: GS_INTL,     name: "Goldman Sachs International", parent: GOLDMAN, kind: banco, country: GB,
+     identifiers: [EFCGHQN14L2BKODNPK19], aliases: [GOLDMAN SACHS INTERNATIONAL]}
+  - {key: GS_BANK,     name: "Goldman Sachs Bank", parent: GOLDMAN, kind: banco, country: US,
+     identifiers: [N9FYJ29MC81JI74MJE92], aliases: [GOLDMAN SACHS BANK]}
+  - {key: GS_BANK_USA, name: "Goldman Sachs Bank USA", parent: GOLDMAN, kind: banco, country: US,
+     identifiers: [KD3XUN7C6T14HNAYLU02], aliases: [GOLDMAN SACHS BANK USA]}
+
+  # --- Grupo Barclays --------------------------------------------------------
+  - {key: BARCLAYS,     name: "Grupo Barclays", kind: banco, country: GB}
+  - {key: BARCLAYS_BK,  name: "Barclays Bank PLC", parent: BARCLAYS, kind: banco, country: GB,
+     ruts: [59026010], identifiers: [G5GSEF7VJP5I7OUK5573], aliases: [BARCLAYS BANK PLC, BARCLAYS BANK]}
+  - {key: BARCLAYS_PLC, name: "Barclays PLC", parent: BARCLAYS, kind: banco, country: GB,
+     identifiers: [213800UUGANOMFJ9X769, AC28XWWI3WIBK2824319], aliases: [BARCLAYS PLC]}
+
+  # --- Grupo Citi ------------------------------------------------------------
+  - {key: CITI,    name: "Grupo Citi", kind: banco, country: US}
+  - {key: CITI_CL, name: "Citibank N.A. (Agencia Chile)", parent: CITI, kind: banco, country: CL,
+     ruts: [97008000], aliases: ["CITIBANK N.A AGENCIA EN CHILE", CITIBANK CHILE]}
+  - {key: CITI_NA, name: "Citibank N.A.", parent: CITI, kind: banco, country: US,
+     identifiers: [E57ODZWZ7FF32TWEFA76, 549300K8R9VXUE545U04],
+     aliases: ["CITIBANK N.A.", CITIBANK NA NY, CITIBANK]}
+
+  # --- Grupo HSBC ------------------------------------------------------------
+  - {key: HSBC,      name: "Grupo HSBC", kind: banco, country: GB}
+  - {key: HSBC_CL,   name: "HSBC Bank Chile", parent: HSBC, kind: banco, country: CL,
+     ruts: [97951000], aliases: [HSBC BANK CHILE, HSBC BANK]}
+  - {key: HSBC_USA,  name: "HSBC Bank USA N.A.", parent: HSBC, kind: banco, country: US,
+     identifiers: [213800JVHAGFQYZSO120], aliases: [HSBC BANK USA]}
+  - {key: HSBC_PLC,  name: "HSBC Bank PLC", parent: HSBC, kind: banco, country: GB,
+     identifiers: [MP6I5ZYZBEU3UXPYFY54], aliases: [HSBC BANK PLC]}
+
+  # --- Grupo Bank of America -------------------------------------------------
+  - {key: BOFA,     name: "Grupo Bank of America", kind: banco, country: US}
+  - {key: BOFA_NA,  name: "Bank of America N.A.", parent: BOFA, kind: banco, country: US,
+     identifiers: [B4TYDEB6GKMZO031MB27], aliases: [BANK OF AMERICA, BANK OF AMERICA NA]}
+  - {key: MERRILL,  name: "Merrill Lynch International", parent: BOFA, kind: banco, country: GB,
+     identifiers: [GGDZP1UYGU9STUHRDP48], aliases: [MERRILL LYNCH INTERNATIONAL, MERRILL LYNCH]}
+
+  # --- Grupo Deutsche Bank ---------------------------------------------------
+  - {key: DEUTSCHE,    name: "Grupo Deutsche Bank", kind: banco, country: DE}
+  - {key: DEUTSCHE_LN, name: "Deutsche Bank AG (London)", parent: DEUTSCHE, kind: banco, country: GB,
+     identifiers: [54930036B12A3G2SIW61, 7LTWFZYICNSX8D621K86],
+     aliases: [DEUTSCHE BANK LONDON, DEUTSCHE BANK AG LONDON, DEUTSCHE BANK]}
+
+  # --- Grupo Consorcio -------------------------------------------------------
+  - {key: CONSORCIO,      name: "Grupo Consorcio", kind: banco, country: CL}
+  - {key: CONSORCIO_BCO,  name: "Banco Consorcio", parent: CONSORCIO, kind: banco, country: CL,
+     ruts: [99500410], aliases: [BANCO CONSORCIO]}
+  - {key: CONSORCIO_CB,   name: "Consorcio Corredores de Bolsa S.A.", parent: CONSORCIO, kind: corredora, country: CL,
+     aliases: ["CONSORCIO CORREDORES DE BOLSA S.A.", CONSORCIO CORREDORES DE BOLSA]}
+  - {key: CONSORCIO_VIDA, name: "Consorcio Nacional de Seguros Vida S.A.", parent: CONSORCIO, kind: aseguradora, country: CL,
+     aliases: ["CONSORCIO NACIONAL DE SEGUROS VIDA S.A.", "CIA DE SEGUROS GENERALES CONSORCIO NACIONAL DE SEGUROS",
+               "CN LIFE COMPA IA DE SEGUROS DE VIDA S.A.", CN LIFE]}
+
+  # --- Contrapartes sin grupo (una sola entidad) -----------------------------
+  - {key: BICE,          name: "Banco BICE", kind: banco, country: CL,
+     ruts: [97080000], aliases: [BANCO BICE]}
+  - {key: FALABELLA,     name: "Banco Falabella", kind: banco, country: CL,
+     ruts: [96509660], aliases: [BANCO FALABELLA]}
+  - {key: ESTADO,        name: "Banco del Estado de Chile", kind: banco, country: CL,
+     ruts: [97030000], aliases: [BANCO ESTADO, BANCO DEL ESTADO DE CHILE, BANCOESTADO]}
+  - {key: INTERNACIONAL, name: "Banco Internacional", kind: banco, country: CL,
+     ruts: [97011000], aliases: [BANCO INTERNACIONAL]}
+  - {key: SECURITY,      name: "Banco Security", kind: banco, country: CL,
+     ruts: [97053000], aliases: [BANCO SECURITY]}
+  - {key: BTG,           name: "Banco BTG Pactual Chile", kind: banco, country: CL,
+     ruts: [76362099], aliases: [BANCO BTG PACTUAL CHILE, BTG PACTUAL]}
+  - {key: MORGANSTANLEY, name: "Morgan Stanley & Co. International", kind: banco, country: GB,
+     identifiers: [I7331LVCZKQKX5T7XV54], aliases: [MORGAN STANLEY]}
+  - {key: STANCHART,     name: "Standard Chartered Bank", kind: banco, country: GB,
+     identifiers: [276345HYMX591FE8F735], aliases: [STANDARD CHARTERED BANK]}
+  - {key: BNP,           name: "BNP Paribas", kind: banco, country: FR,
+     identifiers: [R0MUWSFPU8MPRO8K5P83], aliases: [BNP PARIBAS]}
+  - {key: PHILLIP,       name: "Phillip Capital Inc.", kind: corredora, country: SG,
+     identifiers: [549300AZCWF9DX4IYK18], aliases: [PHILLIP CAPITAL, PHILLIP CAPITAL INC]}
+  - {key: SMBC,          name: "SMBC Capital Markets Inc.", kind: banco, country: US,
+     identifiers: [TVJ8SHLIZL0RGWGDTN03],
+     aliases: ["SMBC CAPITAL MARKETS INC. NY", "SMBC CAPITAL MARKETS INC. NEW YORK (SBCM)", SMBC CAPITAL MARKETS]}

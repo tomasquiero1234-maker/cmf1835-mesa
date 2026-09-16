@@ -1,0 +1,1022 @@
+# =============================================================================
+#  cmf1835 :: layouts declarativos  --  Circular N 1835 CMF (Chile)
+# =============================================================================
+#  NORMA      : Anexos Tecnicos Circular N 1835, vigente desde 2024-12-01
+#               (Circular N 2354 de 2024-07-30)
+#  FUENTE     : Anexos_Tecnicos_Circular_N1835.pdf, transcrito campo a campo.
+#
+#  REGLAS DE FORMATO (Seccion A.4 del anexo):
+#    - ASCII, registros de largo fijo, relleno con ceros a la izquierda.
+#    - La "V" del PICTURE NO ocupa posicion: decimales implicitos.
+#      9(13)V9(04) -> 17 caracteres, 4 decimales.
+#    - Campos con signo: -9(13) -> 14 caracteres; primer caracter '-' si es
+#      negativo, '+' o espacio si es positivo.
+#    - El caracter ',' se interpreta como digito cero.
+#    - Montos en M$ (miles de pesos), aproximados al entero superior.
+#
+#  ANCHO EN CARACTERES, NO EN BYTES:
+#    Los archivos vienen en UTF-8 y el relleno es por caracteres. Un registro
+#    con 'N' mide 970 caracteres pero 971 bytes. Cortar por bytes desplaza el
+#    registro completo.
+#
+#  VERIFICACION DE LARGOS (suma de PICTURE vs. archivos reales):
+#    B.1  -> 970 en los 3 tipos de registro    [coincide con los datos]
+#    B.7  -> 587 en los 7 tipos de registro    [coincide con los datos]
+#    B.14 -> 300 en los 3 tipos de registro    [sin muestra disponible]
+#    B.2  -> 572 en los 3 tipos               [coincide con los datos]
+#    B.3  -> 361 en los 3 tipos               [coincide con los datos]
+#    B.4  -> 506 en los 3 tipos               [coincide con los datos]
+#    B.5  -> 611 en los 6 tipos               [coincide con los datos]
+#    B.6  -> 510 en los 3 tipos               [coincide con los datos]
+#    B.8  -> 138 en los 3 tipos               [coincide con los datos]
+#
+#  OJO -- ESTE YAML DESCRIBE UNA SOLA GENERACION DEL LAYOUT (202412 en
+#  adelante). La CMF cambio los largos en 202412: antes B.1 median 930 y
+#  B.7 median 489, y no existia B.14. Los periodos 202312-202411 NO se
+#  pueden leer con este archivo; el motor los detecta por largo y los deja
+#  sin campos en vez de inventarlos.
+#
+#  Campo `prov`:
+#    official : transcrito del anexo oficial.
+#    verified : ademas contrastado contra registros reales del ZIP.
+# =============================================================================
+
+version: "2024-12-01"
+circular: "1835"
+modificada_por: "2354/2024"
+
+defaults:
+  encoding_candidates: [utf-8, cp1252, latin-1]
+  slice_unit: characters
+  comma_is_zero: true
+  blank_is_null: true
+
+files:
+
+  # ---------------------------------------------------------------------------
+  # B.1  INSTRUMENTOS DE RENTA FIJA  ->  IaammddG.<RUT>   (970 caracteres)
+  # ---------------------------------------------------------------------------
+  I:
+    anexo: "B.1"
+    descripcion: "Instrumentos de Renta Fija"
+    record_length: 970
+    record_length_status: verified
+    record_types:
+      "1":
+        name: IDENTIFICACION
+        cardinality: exactly_one_first
+        fields:
+        - {name: "TIPO", pic: "9(01)", start: 0, len: 1, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "RUT", pic: "9(09)", start: 1, len: 9, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "VERIFICADOR", pic: "X(01)", start: 10, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "NOMBRE", pic: "X(60)", start: 11, len: 60, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "PERIODO", pic: "9(06)", start: 71, len: 6, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "FILLER", pic: "X(893)", start: 77, len: 893, kind: text, dec: 0, signed: false, prov: official}
+      "2":
+        name: DETALLE
+        cardinality: many
+        fields:
+        - {name: "TIPO", pic: "9(01)", start: 0, len: 1, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "CODIGO_OPERACION", pic: "X(03)", start: 1, len: 3, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "FOLIO_OPERACION", pic: "9(10)", start: 4, len: 10, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "ITEM_OPERACION", pic: "9(03)", start: 14, len: 3, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "FECHA_COMPRA", pic: "9(08)", start: 17, len: 8, kind: date, dec: 0, signed: false, prov: official}
+        - {name: "FECHA_DE_PAGO", pic: "9(08)", start: 25, len: 8, kind: date, dec: 0, signed: false, prov: official}
+        - {name: "NRO_RUT", pic: "9(09)", start: 33, len: 9, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "DIG_RUT", pic: "X(01)", start: 42, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "TIPO_INSTRUMENTO", pic: "X(10)", start: 43, len: 10, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "NEMOTECNICO", pic: "X(30)", start: 53, len: 30, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "FECHA_EMISION", pic: "9(08)", start: 83, len: 8, kind: date, dec: 0, signed: false, prov: official}
+        - {name: "NUM_INSCRIPCION", pic: "9(05)", start: 91, len: 5, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "FECHA_INSCRIPCION", pic: "9(08)", start: 96, len: 8, kind: date, dec: 0, signed: false, prov: official}
+        - {name: "SERIE", pic: "X(10)", start: 104, len: 10, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "PAIS", pic: "X(02)", start: 114, len: 2, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "VALOR_NOMINAL", pic: "9(13)V9(04)", start: 116, len: 17, kind: num, dec: 4, signed: false, prov: official}
+        - {name: "VALOR_NOMINAL_VIGENTE", pic: "9(13)V9(04)", start: 133, len: 17, kind: num, dec: 4, signed: false, prov: official}
+        - {name: "UNIDAD_MONETARIA", pic: "X(06)", start: 150, len: 6, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "PROHIBICION", pic: "X(01)", start: 156, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "ACTIVO_EN_MARGEN", pic: "X(10)", start: 157, len: 10, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "INSTRUMENTO_VENCIDO", pic: "X(01)", start: 167, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "GARANTIA_ESTATAL", pic: "X(01)", start: 168, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "OPCION_DE_PREPAGO_O_RESCATE", pic: "X(01)", start: 169, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "FECHA_DE_PREPAGO", pic: "9(08)", start: 170, len: 8, kind: date, dec: 0, signed: false, prov: official}
+        - {name: "ACTIVO_RESPALDA_RESERVA_VALOR_DE_FONDO", pic: "X(05)", start: 178, len: 5, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "NOMBRE_DEL_FONDO", pic: "X(30)", start: 183, len: 30, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "NOMBRE_CARTERA", pic: "X(30)", start: 213, len: 30, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "ACTIVO_CALCE", pic: "X(03)", start: 243, len: 3, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "CON_DESCRIPTOR", pic: "X(01)", start: 246, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "RELACIONADO", pic: "X(02)", start: 247, len: 2, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "CLASIFICACION_DE_RIESGO", pic: "X(15)", start: 249, len: 15, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "INCREMENTO_RIESGO", pic: "X(01)", start: 264, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "CLASIFICACION_INVERSION", pic: "X(01)", start: 265, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "FECHA_VENCIMIENTO", pic: "9(08)", start: 266, len: 8, kind: date, dec: 0, signed: false, prov: official}
+        - {name: "PLAZO_AL_VENCIMIENTO", pic: "9(03)", start: 274, len: 3, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "DURACION", pic: "9(02)V9(02)", start: 277, len: 4, kind: num, dec: 2, signed: false, prov: official}
+        - {name: "TIPO_AMORTIZACION", pic: "9(02)", start: 281, len: 2, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "TASA_EMISION", pic: "-9(03)V9(04)", start: 283, len: 8, kind: num, dec: 4, signed: true, prov: official}
+        - {name: "TASA_BASE", pic: "X(12)", start: 291, len: 12, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "TSA", pic: "X(02)", start: 303, len: 2, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "COBERTURA", pic: "X(05)", start: 305, len: 5, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "SUBYACENTE", pic: "X(07)", start: 310, len: 7, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "METOD_CLASIF_VALORIZ_EEFF", pic: "X(06)", start: 317, len: 6, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "CRITERIO_VALORIZACION", pic: "X(02)", start: 323, len: 2, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "MODELO_VALORACION", pic: "X(02)", start: 325, len: 2, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "EFECTO_PATRIMONIO", pic: "X(02)", start: 327, len: 2, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "MODELO_PROPIO_DETERIORO", pic: "X(02)", start: 329, len: 2, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "CODIGO_ACTIVIDAD_ECONOMICA", pic: "9(06)", start: 331, len: 6, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "GRUPO_ECONOMICO", pic: "9(03)", start: 337, len: 3, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "FUENTE_PRECIOS", pic: "X(13)", start: 340, len: 13, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "RUT_PRECIO", pic: "9(09)", start: 353, len: 9, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "DIG_RUT_PRECIO", pic: "X(01)", start: 362, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "TIPO_NOMINALES", pic: "X(01)", start: 363, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "TRATAMIENTO", pic: "X(02)", start: 364, len: 2, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "VALOR_INICIAL", pic: "9(13)", start: 366, len: 13, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "VALOR_PACTADO", pic: "9(13)V9(04)", start: 379, len: 17, kind: num, dec: 4, signed: false, prov: official}
+        - {name: "UNIDAD_MONETARIA_P", pic: "X(06)", start: 396, len: 6, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "FECHA_VENC_PACTO", pic: "9(08)", start: 402, len: 8, kind: date, dec: 0, signed: false, prov: official}
+        - {name: "TASA_PACTO", pic: "-9(03)V9(04)", start: 410, len: 8, kind: num, dec: 4, signed: true, prov: official}
+        - {name: "TASA_BASE_P", pic: "X(12)", start: 418, len: 12, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "TIPO_NOMINALES_P", pic: "X(01)", start: 430, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "VALOR_PACTO", pic: "9(13)", start: 431, len: 13, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "CODIGO_AGENTE", pic: "X(04)", start: 444, len: 4, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "FIN_1", pic: "9(02)", start: 448, len: 2, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "FIN_2", pic: "X(01)", start: 450, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "FIN_CLEAS", pic: "X(01)", start: 451, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "TIPO_DEUDOR", pic: "X(01)", start: 452, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "RUT_DEUDOR", pic: "9(09)", start: 453, len: 9, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "VERIFICADOR_DEUDOR", pic: "X(01)", start: 462, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "FECHA_PRIMER_DIVIDENDO", pic: "9(08)", start: 463, len: 8, kind: date, dec: 0, signed: false, prov: official}
+        - {name: "MONTO_DIVIDENDO_O_CUOTA_UM", pic: "9(13)V9(04)", start: 471, len: 17, kind: num, dec: 4, signed: false, prov: official}
+        - {name: "DIVIDENDO_O_CUOTA_FINAL_UM", pic: "9(13)V9(04)", start: 488, len: 17, kind: num, dec: 4, signed: false, prov: official}
+        - {name: "NRO_DIVIDENDOS_IMPAGOS", pic: "9(03)", start: 505, len: 3, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "DIVIDENDOS_IMPAGOS_UM", pic: "9(13)V9(04)", start: 508, len: 17, kind: num, dec: 4, signed: false, prov: official}
+        - {name: "DIVIDENDOS_IMPAGOS_MP", pic: "9(13)", start: 525, len: 13, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "VALOR_COMERCIAL_UM", pic: "9(13)V9(04)", start: 538, len: 17, kind: num, dec: 4, signed: false, prov: official}
+        - {name: "VALOR_COMERCIAL_MP", pic: "9(13)", start: 555, len: 13, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "FECHA_TASACION", pic: "9(08)", start: 568, len: 8, kind: date, dec: 0, signed: false, prov: official}
+        - {name: "SALDO_INSOLUTO_DEUDA_UM", pic: "9(13)V9(04)", start: 576, len: 17, kind: num, dec: 4, signed: false, prov: official}
+        - {name: "SALDO_INSOLUTO_DEUDA_MP", pic: "9(13)", start: 593, len: 13, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "SPREAD_A_LA_EMISION", pic: "9(03)V9(04)", start: 606, len: 7, kind: num, dec: 4, signed: false, prov: official}
+        - {name: "ENDOSO", pic: "X(02)", start: 613, len: 2, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "SALDO_PLAZO_CONTRATO", pic: "9(03)", start: 615, len: 3, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "DEUDA_GARANTIA_OTOR", pic: "9(04)V9(04)", start: 618, len: 8, kind: num, dec: 4, signed: false, prov: official}
+        - {name: "DEUDA_GARANTIA_PER", pic: "9(04)V9(04)", start: 626, len: 8, kind: num, dec: 4, signed: false, prov: official}
+        - {name: "RUT_DEUDOR_SIND", pic: "9(09)", start: 634, len: 9, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "VERIFICADOR_DEUDOR_SIND", pic: "X(01)", start: 643, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "NOMBRE_DEUDOR", pic: "X(60)", start: 644, len: 60, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "PORCENTAJE_PARTICIPACION_COMPANIA", pic: "9(03)V9(02)", start: 704, len: 5, kind: num, dec: 2, signed: false, prov: official}
+        - {name: "MONTO_TOTAL_PRESTAMO", pic: "9(13)", start: 709, len: 13, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "RUT_LIDER", pic: "9(09)", start: 722, len: 9, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "VERIFICADOR_LIDER", pic: "X(01)", start: 731, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "NOMBRE_LIDER", pic: "X(60)", start: 732, len: 60, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "CLASIFICACION_BCO_LIDER", pic: "X(02)", start: 792, len: 2, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "PORCENTAJE_VALOR_PAR", pic: "9(03)V9(04)", start: 794, len: 7, kind: num, dec: 4, signed: false, prov: official}
+        - {name: "VALOR_COMPRA", pic: "9(13)", start: 801, len: 13, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "TIR_SIN_COSTO", pic: "-9(03)V9(04)", start: 814, len: 8, kind: num, dec: 4, signed: true, prov: official}
+        - {name: "TIR_COMPRA", pic: "-9(03)V9(04)", start: 822, len: 8, kind: num, dec: 4, signed: true, prov: official}
+        - {name: "COSTO_AMORTIZADO_UM", pic: "9(11)V9(04)", start: 830, len: 15, kind: num, dec: 4, signed: false, prov: official}
+        - {name: "COSTO_AMORTIZADO_P", pic: "9(13)", start: 845, len: 13, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "TIR_MERCADO", pic: "-9(03)V9(04)", start: 858, len: 8, kind: num, dec: 4, signed: true, prov: official}
+        - {name: "VALOR_RAZONABLE", pic: "9(13)", start: 866, len: 13, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "DETERIORO", pic: "-9(13)", start: 879, len: 14, kind: num, dec: 0, signed: true, prov: official}
+        - {name: "VALOR_FINAL_B1", pic: "9(13)", start: 893, len: 13, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "CUSTODIA_INV", pic: "X(03)", start: 906, len: 3, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "NOMBRE_CUSTODIO", pic: "X(60)", start: 909, len: 60, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "SUSCEPTIBLES_DE_CUSTODIA", pic: "X(01)", start: 969, len: 1, kind: text, dec: 0, signed: false, prov: official}
+      "3":
+        name: TOTALES
+        cardinality: exactly_one_last
+        control: {field: TOTAL_REGISTROS, rule: equals_total_lines_in_file}
+        fields:
+        - {name: "TIPO", pic: "9(01)", start: 0, len: 1, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "TOTAL_REGISTROS", pic: "9(06)", start: 1, len: 6, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "FILLER", pic: "X(963)", start: 7, len: 963, kind: text, dec: 0, signed: false, prov: official}
+
+  # ---------------------------------------------------------------------------
+  # B.7  INVERSIONES EN INSTRUMENTOS DERIVADOS Y PACTOS -> PaammddG.<RUT>
+  #      587 caracteres. Registros 2..6 = Opciones, Forwards, Futuros, Swaps,
+  #      Pactos. La Circular 2354 agrego RUT y LEI de contraparte, tipo de
+  #      contraparte, compensacion bilateral, tipo de documentacion (ISDA) y
+  #      enlace al archivo de garantias -- ver IDENTIFICADOR_GARANTIA.
+  # ---------------------------------------------------------------------------
+  P:
+    anexo: "B.7"
+    descripcion: "Inversiones en Instrumentos Derivados y Pactos"
+    record_length: 587
+    record_length_status: verified
+    record_types:
+      "1":
+        name: IDENTIFICACION
+        cardinality: exactly_one_first
+        fields:
+        - {name: "TIPO", pic: "9(01)", start: 0, len: 1, kind: num, dec: 0, signed: false, prov: verified}
+        - {name: "RUT", pic: "9(09)", start: 1, len: 9, kind: num, dec: 0, signed: false, prov: verified}
+        - {name: "VERIFICADOR", pic: "X(01)", start: 10, len: 1, kind: text, dec: 0, signed: false, prov: verified}
+        - {name: "NOMBRE", pic: "X(60)", start: 11, len: 60, kind: text, dec: 0, signed: false, prov: verified}
+        - {name: "PERIODO", pic: "9(06)", start: 71, len: 6, kind: num, dec: 0, signed: false, prov: verified}
+        - {name: "FILLER", pic: "X(510)", start: 77, len: 510, kind: text, dec: 0, signed: false, prov: verified}
+      "2":
+        name: OPCIONES
+        cardinality: many
+        fields:
+        - {name: "TIPO", pic: "9(01)", start: 0, len: 1, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "OBJETIVO_CONTRATO", pic: "X(03)", start: 1, len: 3, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "TIPO_OPERACION", pic: "X(10)", start: 4, len: 10, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "TIPO_CONTRATO", pic: "9(02)", start: 14, len: 2, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "FOLIO_OPERACION", pic: "9(10)", start: 16, len: 10, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "ITEM_OPERACION", pic: "9(03)", start: 26, len: 3, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "FECHA_DE_LA_OPERACION", pic: "9(08)", start: 29, len: 8, kind: date, dec: 0, signed: false, prov: official}
+        - {name: "FECHA_DE_VENCIMIENTO_DEL_CONTRATO", pic: "9(08)", start: 37, len: 8, kind: date, dec: 0, signed: false, prov: official}
+        - {name: "RUT_CONTRAPARTE_NACIONAL", pic: "9(09)", start: 45, len: 9, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "DV_CONTRAPARTE_NACIONAL", pic: "X(01)", start: 54, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "LEI_CONTRAPARTE_EXTRANJERA", pic: "X(20)", start: 55, len: 20, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "NOMBRE", pic: "X(60)", start: 75, len: 60, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "NACIONALIDAD", pic: "X(02)", start: 135, len: 2, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "RELACIONADO", pic: "X(02)", start: 137, len: 2, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "TIPO_CONTRAPARTE", pic: "9(02)", start: 139, len: 2, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "CM_COMPENSACION_BILATERAL", pic: "X(02)", start: 141, len: 2, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "TIPO_DOCUMENTACION", pic: "9(02)", start: 143, len: 2, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "ANEXO_GARANTIA", pic: "X(02)", start: 145, len: 2, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "CLASIFICACION_DE_RIESGO", pic: "X(15)", start: 147, len: 15, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "ACTIVO_OBJETO_POSICION_LARGA(nombre)", pic: "X(30)", start: 162, len: 30, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "ACTIVO_OBJETO_POSICION_CORTA_(nombre)", pic: "X(30)", start: 192, len: 30, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "ACTIVO_OBJETO(unidades)", pic: "9(13)V9(03)", start: 222, len: 16, kind: num, dec: 3, signed: false, prov: official}
+        - {name: "MONEDA", pic: "X(06)", start: 238, len: 6, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "PRECIO_DE_EJERCICIO", pic: "9(10)V9(03)", start: 244, len: 13, kind: num, dec: 3, signed: false, prov: official}
+        - {name: "PRECIO_SPOT_DEL_ACTIVO_SUBYACENTE", pic: "9(10)V9(03)", start: 257, len: 13, kind: num, dec: 3, signed: false, prov: official}
+        - {name: "PRIMA_DE_LA_OPCION(monto)", pic: "9(13)V9(03)", start: 270, len: 16, kind: num, dec: 3, signed: false, prov: official}
+        - {name: "PRIMA_DE_LA_OPCION(moneda)", pic: "X(06)", start: 286, len: 6, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "VALOR_RAZONABLE_DEL_ACTIVO_OBJETO_A_LA_FECHA_DE_INFORMACION(monto)", pic: "9(13)", start: 292, len: 13, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "NUMERO_DE_CONTRATOS", pic: "9(06)", start: 305, len: 6, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "VALORRAZONABLEDELAOPCIONALAFECHADEINFORMACION", pic: "-9(12)", start: 311, len: 13, kind: num, dec: 0, signed: true, prov: official}
+        - {name: "ORIGEN_DE_LA_INFORMACION", pic: "X(30)", start: 324, len: 30, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "ACTIVO_", pic: "X(05)", start: 354, len: 5, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "NOMBRE_DEL_FONDO", pic: "X(30)", start: 359, len: 30, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "NOMBRE_CARTERA", pic: "X(30)", start: 389, len: 30, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "MONTO_ACTIVOS_EN_MARGEN", pic: "9(13)", start: 419, len: 13, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "IDENTIFICADOR_GARANTIA", pic: "X(14)", start: 432, len: 14, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "MONTO(activo)", pic: "9(13)", start: 446, len: 13, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "MONTO(pasivo)", pic: "9(13)", start: 459, len: 13, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "EFECTO_EN_RESULTADOS_REALIZADOS", pic: "-9(13)", start: 472, len: 14, kind: num, dec: 0, signed: true, prov: official}
+        - {name: "TSA", pic: "X(02)", start: 486, len: 2, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "METOD_CLASIF_VALORIZ_EEFF", pic: "X(6)", start: 488, len: 6, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "FILLER", pic: "X(93)", start: 494, len: 93, kind: text, dec: 0, signed: false, prov: official}
+      "3":
+        name: FORWARDS
+        cardinality: many
+        fields:
+        - {name: "TIPO", pic: "9(01)", start: 0, len: 1, kind: num, dec: 0, signed: false, prov: verified}
+        - {name: "OBJETIVO_CONTRATO", pic: "X(05)", start: 1, len: 5, kind: text, dec: 0, signed: false, prov: verified}
+        - {name: "TIPO_OPERACION", pic: "X(10)", start: 6, len: 10, kind: text, dec: 0, signed: false, prov: verified}
+        - {name: "TIPO_CONTRATO", pic: "9(02)", start: 16, len: 2, kind: num, dec: 0, signed: false, prov: verified}
+        - {name: "FOLIO_OPERACION", pic: "9(10)", start: 18, len: 10, kind: num, dec: 0, signed: false, prov: verified}
+        - {name: "ITEM_OPERACION", pic: "9(03)", start: 28, len: 3, kind: num, dec: 0, signed: false, prov: verified}
+        - {name: "FECHA_DE_LA_OPERACION", pic: "9(08)", start: 31, len: 8, kind: date, dec: 0, signed: false, prov: verified}
+        - {name: "FECHA_DE_VENCIMIENTO_DEL_CONTRATO", pic: "9(08)", start: 39, len: 8, kind: date, dec: 0, signed: false, prov: verified}
+        - {name: "RUT_CONTRAPARTE_NACIONAL", pic: "9(09)", start: 47, len: 9, kind: num, dec: 0, signed: false, prov: verified}
+        - {name: "DV_CONTRAPARTE_NACIONAL", pic: "X(01)", start: 56, len: 1, kind: text, dec: 0, signed: false, prov: verified}
+        - {name: "LEI_CONTRAPARTE_EXTRANJERA", pic: "X(20)", start: 57, len: 20, kind: text, dec: 0, signed: false, prov: verified}
+        - {name: "NOMBRE", pic: "X(60)", start: 77, len: 60, kind: text, dec: 0, signed: false, prov: verified}
+        - {name: "NACIONALIDAD", pic: "X(02)", start: 137, len: 2, kind: text, dec: 0, signed: false, prov: verified}
+        - {name: "RELACIONADO", pic: "X(02)", start: 139, len: 2, kind: text, dec: 0, signed: false, prov: verified}
+        - {name: "TIPO_CONTRAPARTE", pic: "9(02)", start: 141, len: 2, kind: num, dec: 0, signed: false, prov: verified}
+        - {name: "CM_COMPENSACION_BILATERAL", pic: "X(02)", start: 143, len: 2, kind: text, dec: 0, signed: false, prov: verified}
+        - {name: "TIPO_DOCUMENTACION", pic: "9(02)", start: 145, len: 2, kind: num, dec: 0, signed: false, prov: verified}
+        - {name: "ANEXO_GARANTIA", pic: "X(02)", start: 147, len: 2, kind: text, dec: 0, signed: false, prov: verified}
+        - {name: "CLASIFICACION_DE_RIESGO", pic: "X(15)", start: 149, len: 15, kind: text, dec: 0, signed: false, prov: verified}
+        - {name: "ACTIVO_RESPALDA_RESERVA_VALOR_DE_FONDO", pic: "X(05)", start: 164, len: 5, kind: text, dec: 0, signed: false, prov: verified}
+        - {name: "NOMBRE_DEL_FONDO", pic: "X(30)", start: 169, len: 30, kind: text, dec: 0, signed: false, prov: verified}
+        - {name: "NOMBRE_CARTERA", pic: "X(30)", start: 199, len: 30, kind: text, dec: 0, signed: false, prov: verified}
+        - {name: "ACTIVO_OBJETO_POSICION_LARGA(nombre)", pic: "X(30)", start: 229, len: 30, kind: text, dec: 0, signed: false, prov: verified}
+        - {name: "ACTIVO_OBJETO_POSICION_CORTA_(nombre)", pic: "X(30)", start: 259, len: 30, kind: text, dec: 0, signed: false, prov: verified}
+        - {name: "ACTIVO_OBJETO_POSICION_LARGA(unidades)", pic: "9(13)V9(03)", start: 289, len: 16, kind: num, dec: 3, signed: false, prov: verified}
+        - {name: "ACTIVO_OBJETO_POSICION_CORTA(unidades)", pic: "9(13)V9(03)", start: 305, len: 16, kind: num, dec: 3, signed: false, prov: verified}
+        - {name: "NOCIONAL_POSICION_LARGA(monto)", pic: "9(13)", start: 321, len: 13, kind: num, dec: 0, signed: false, prov: verified}
+        - {name: "NOCIONAL_POSICION_CORTA(monto)", pic: "9(13)", start: 334, len: 13, kind: num, dec: 0, signed: false, prov: verified}
+        - {name: "MONEDA", pic: "X(06)", start: 347, len: 6, kind: text, dec: 0, signed: false, prov: verified}
+        - {name: "PRECIO_FORWARD_CONTRATO", pic: "9(10)V9(05)", start: 353, len: 15, kind: num, dec: 5, signed: false, prov: verified}
+        - {name: "VALOR_DE_MERCADO_DEL_ACTIVO_OBJETO_A_LA_FECHA_DE_INFORMACION(monto)", pic: "9(13)V9(03)", start: 368, len: 16, kind: num, dec: 3, signed: false, prov: verified}
+        - {name: "PRECIO_SPOT_DEL_ACTIVO_SUBYACENTE", pic: "9(10)V9(03)", start: 384, len: 13, kind: num, dec: 3, signed: false, prov: verified}
+        - {name: "PRECIO_FORWARD_MERCADO", pic: "9(10)V9(05)", start: 397, len: 15, kind: num, dec: 5, signed: false, prov: verified}
+        - {name: "TASA_DESCUENTO_DE_FLUJOS", pic: "-9(10)V9(03)", start: 412, len: 14, kind: num, dec: 3, signed: true, prov: verified}
+        - {name: "VALOR_RAZONABLE_DEL_CONTRATO_A_LA_FECHA_DE_LA_INFORMACION", pic: "-9(13)", start: 426, len: 14, kind: num, dec: 0, signed: true, prov: verified}
+        - {name: "VALOR_RAZONABLE_DEL_CONTRATO_A_LA_FECHA_DE_LA_INFORMACION_EC", pic: "-9(13)", start: 440, len: 14, kind: num, dec: 0, signed: true, prov: verified}
+        - {name: "ORIGEN_DE_LA_INFORMACION", pic: "X(30)", start: 454, len: 30, kind: text, dec: 0, signed: false, prov: verified}
+        - {name: "MONTO_ACTIVOS_EN_MARGEN", pic: "9(13)", start: 484, len: 13, kind: num, dec: 0, signed: false, prov: verified}
+        - {name: "IDENTIFICADOR_GARANTIA", pic: "X(14)", start: 497, len: 14, kind: text, dec: 0, signed: false, prov: verified}
+        - {name: "MONTO(activo)", pic: "9(13)", start: 511, len: 13, kind: num, dec: 0, signed: false, prov: verified}
+        - {name: "MONTO(pasivo)", pic: "9(13)", start: 524, len: 13, kind: num, dec: 0, signed: false, prov: verified}
+        - {name: "EFECTO_EN_RESULTADOS_REALIZADOS", pic: "-9(13)", start: 537, len: 14, kind: num, dec: 0, signed: true, prov: verified}
+        - {name: "TSA", pic: "X(02)", start: 551, len: 2, kind: text, dec: 0, signed: false, prov: verified}
+        - {name: "METOD_CLASIF_VALORIZ_EEFF", pic: "X(6)", start: 553, len: 6, kind: text, dec: 0, signed: false, prov: verified}
+        - {name: "FILLER", pic: "X(28)", start: 559, len: 28, kind: text, dec: 0, signed: false, prov: verified}
+      "4":
+        name: FUTUROS
+        cardinality: many
+        fields:
+        - {name: "TIPO", pic: "9(01)", start: 0, len: 1, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "OBJETIVO_CONTRATO", pic: "X(3)", start: 1, len: 3, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "TIPO_OPERACION", pic: "X(10)", start: 4, len: 10, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "TIPO_CONTRATO", pic: "9(02)", start: 14, len: 2, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "FOLIO_OPERACION", pic: "9(10)", start: 16, len: 10, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "ITEM_OPERACION", pic: "9(03)", start: 26, len: 3, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "FECHA_DE_LA_OPERACION", pic: "9(08)", start: 29, len: 8, kind: date, dec: 0, signed: false, prov: official}
+        - {name: "FECHA_DE_VENCIMIENTO_DEL_CONTRATO", pic: "9(08)", start: 37, len: 8, kind: date, dec: 0, signed: false, prov: official}
+        - {name: "RUT_CONTRAPARTE_NACIONAL", pic: "9(09)", start: 45, len: 9, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "DV_CONTRAPARTE_NACIONAL", pic: "X(01)", start: 54, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "LEI_CONTRAPARTE_EXTRANJERA", pic: "X(20)", start: 55, len: 20, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "NOMBRE", pic: "X(60)", start: 75, len: 60, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "NACIONALIDAD", pic: "X(02)", start: 135, len: 2, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "RELACIONADO", pic: "X(02)", start: 137, len: 2, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "TIPO_CONTRAPARTE", pic: "9(02)", start: 139, len: 2, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "CM_COMPENSACION_BILATERAL", pic: "X(02)", start: 141, len: 2, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "TIPO_DOCUMENTACION", pic: "9(02)", start: 143, len: 2, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "ANEXO_GARANTIA", pic: "X(02)", start: 145, len: 2, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "CLASIFICACION_DE_RIESGO", pic: "X(15)", start: 147, len: 15, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "ACTIVO_RESPALDA_RESERVA_VALOR_DE_FONDO", pic: "X(05)", start: 162, len: 5, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "NOMBRE_DEL_FONDO", pic: "X(30)", start: 167, len: 30, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "NOMBRE_CARTERA", pic: "X(30)", start: 197, len: 30, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "ACTIVO_OBJETO_POSICION_LARGA(nombre)", pic: "X(30)", start: 227, len: 30, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "ACTIVO_OBJETO_POSICION_CORTA_(nombre)", pic: "X(30)", start: 257, len: 30, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "ACTIVO_OBJETO_POSICION_LARGA(unidades)", pic: "9(13)V9(03)", start: 287, len: 16, kind: num, dec: 3, signed: false, prov: official}
+        - {name: "ACTIVO_OBJETO_POSICION_CORTA(unidades)", pic: "9(13)V9(03)", start: 303, len: 16, kind: num, dec: 3, signed: false, prov: official}
+        - {name: "NOCIONAL_POSICION_LARGA(monto)", pic: "9(13)", start: 319, len: 13, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "NOCIONAL_POSICION_CORTA(monto)", pic: "9(13)", start: 332, len: 13, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "MONEDA", pic: "X(06)", start: 345, len: 6, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "NUMERO_DE_CONTRATOS", pic: "9(06)", start: 351, len: 6, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "VALOR_DE_MERCADODEL_ACTIVO_OBJETO_A_LA_FECHA_DE_INFORMACION(monto)", pic: "9(13)", start: 357, len: 13, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "PRECIO_SPOT_", pic: "9(10)V9(05)", start: 370, len: 15, kind: num, dec: 5, signed: false, prov: official}
+        - {name: "PRECIO_FUTURO_DE_MERCADO_AL_INICIO_DE_LA_OPERACION", pic: "9(10)V9(05)", start: 385, len: 15, kind: num, dec: 5, signed: false, prov: official}
+        - {name: "PRECIO_FUTURO_DE_MERCADO_A_LA_FECHA_DE_INFORMACION", pic: "9(10)V9(05)", start: 400, len: 15, kind: num, dec: 5, signed: false, prov: official}
+        - {name: "ORIGEN_DE_LA_INFORMACION", pic: "X(30)", start: 415, len: 30, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "MONTO_ACTIVOS_EN_MARGEN", pic: "9(13)", start: 445, len: 13, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "IDENTIFICADOR_GARANTIA", pic: "X(14)", start: 458, len: 14, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "MONTO(activo)", pic: "9(13)", start: 472, len: 13, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "MONTO(pasivo)", pic: "9(13)", start: 485, len: 13, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "VALOR_RAZONABLE_DEL_CONTRATO_FUTURO_A_LA_FECHA_DE_INFORMACION", pic: "-9(13)", start: 498, len: 14, kind: num, dec: 0, signed: true, prov: official}
+        - {name: "TSA", pic: "X(02)", start: 512, len: 2, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "METOD_CLASIF_VALORIZ_EEFF", pic: "X(6)", start: 514, len: 6, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "FILLER", pic: "X(67)", start: 520, len: 67, kind: text, dec: 0, signed: false, prov: official}
+      "5":
+        name: SWAPS
+        cardinality: many
+        fields:
+        - {name: "TIPO", pic: "9(01)", start: 0, len: 1, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "OBJETIVO_CONTRATO", pic: "X(05)", start: 1, len: 5, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "TIPO_OPERACION", pic: "X(10)", start: 6, len: 10, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "TIPO_CONTRATO", pic: "9(02)", start: 16, len: 2, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "FOLIO_OPERACION", pic: "9(10)", start: 18, len: 10, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "ITEM_OPERACION", pic: "9(03)", start: 28, len: 3, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "FECHA_DE_LA_OPERACION", pic: "9(08)", start: 31, len: 8, kind: date, dec: 0, signed: false, prov: official}
+        - {name: "FECHA_DE_VENCIMIENTO_DEL_CONTRATO", pic: "9(08)", start: 39, len: 8, kind: date, dec: 0, signed: false, prov: official}
+        - {name: "RUT_CONTRAPARTE_NACIONAL", pic: "9(09)", start: 47, len: 9, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "DV_CONTRAPARTE_NACIONAL", pic: "X(01)", start: 56, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "LEI_CONTRAPARTE_EXTRANJERA", pic: "X(20)", start: 57, len: 20, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "NOMBRE", pic: "X(60)", start: 77, len: 60, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "NACIONALIDAD", pic: "X(02)", start: 137, len: 2, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "RELACIONADO", pic: "X(02)", start: 139, len: 2, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "TIPO_CONTRAPARTE", pic: "9(02)", start: 141, len: 2, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "CM_COMPENSACION_BILATERAL", pic: "X(02)", start: 143, len: 2, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "TIPO_DOCUMENTACION", pic: "9(02)", start: 145, len: 2, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "ANEXO_GARANTIA", pic: "X(02)", start: 147, len: 2, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "CLASIFICACION_DE_RIESGO", pic: "X(15)", start: 149, len: 15, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "NOCIONAL_POSICION_LARGA(monto)", pic: "9(13)", start: 164, len: 13, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "NOCIONAL_POSICION_CORTA(monto)", pic: "9(13)", start: 177, len: 13, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "ACTIVO_OBJETO_POSICION_LARGA(monto)", pic: "9(13)V9(03)", start: 190, len: 16, kind: num, dec: 3, signed: false, prov: official}
+        - {name: "ACTIVO_OBJETO_POSICION_CORTA(monto)", pic: "9(13)V9(03)", start: 206, len: 16, kind: num, dec: 3, signed: false, prov: official}
+        - {name: "MONEDA_POSICION_LARGA", pic: "X(06)", start: 222, len: 6, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "MONEDA_POSICION_CORTA", pic: "X(06)", start: 228, len: 6, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "TASA_A_FUTURO_CONTRATO_POSICION_LARGA", pic: "X(30)", start: 234, len: 30, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "TASA_A_FUTURO_CONTRATO_POSICION_CORTA", pic: "X(30)", start: 264, len: 30, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "TASA_A_FUTURO_CONTRATO_POSICION_LARGA_EC", pic: "9(02)", start: 294, len: 2, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "TASA_A_FUTURO_CONTRATO_POSICION_CORTA_EC", pic: "9(02)", start: 296, len: 2, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "T.C._FUTURO_CONTRATO", pic: "9(10)V9(03)", start: 298, len: 13, kind: num, dec: 3, signed: false, prov: official}
+        - {name: "TASA_A_FUTURO_MERCADOPOSICION_LARGA", pic: "9(10)V9(03)", start: 311, len: 13, kind: num, dec: 3, signed: false, prov: official}
+        - {name: "TASA_A_FUTURO_MERCADO_POSICION_CORTA", pic: "9(10)V9(03)", start: 324, len: 13, kind: num, dec: 3, signed: false, prov: official}
+        - {name: "TIPO_DE_CAMBIO_MERCADO", pic: "9(10)V9(03)", start: 337, len: 13, kind: num, dec: 3, signed: false, prov: official}
+        - {name: "VALOR_PRESENTE_", pic: "9(13)", start: 350, len: 13, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "VALOR_PRESENTE_POSICION_CORTA(M$)", pic: "9(13)", start: 363, len: 13, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "VALOR_RAZONABLE_DEL_ACTIVO_OBJETO_A_LA_FECHA_DE_LA_INFORMACION(M$)", pic: "9(13)", start: 376, len: 13, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "VALOR_RAZONABLE_DEL_CONTRATO_A_LA_FECHA_DE_LA_INFORMACION_(M$)", pic: "-9(13)", start: 389, len: 14, kind: num, dec: 0, signed: true, prov: official}
+        - {name: "VALOR_RAZONABLE_DEL_CONTRATO_A_LA_FECHA_DE_LA_INFORMACION_EC", pic: "-9(13)", start: 403, len: 14, kind: num, dec: 0, signed: true, prov: official}
+        - {name: "ORIGEN_DE_LA_INFORMACION", pic: "X(30)", start: 417, len: 30, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "ACTIVO_RESPALDA_RESERVA_VALOR_DE_FONDO", pic: "X(05)", start: 447, len: 5, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "NOMBRE_DEL_FONDO", pic: "X(30)", start: 452, len: 30, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "NOMBRE_CARTERA", pic: "X(30)", start: 482, len: 30, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "MONTO_ACTIVOS_EN_MARGEN", pic: "9(13)", start: 512, len: 13, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "IDENTIFICADOR_GARANTIA", pic: "X(14)", start: 525, len: 14, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "MONTO(activo)", pic: "9(13)", start: 539, len: 13, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "MONTO(pasivo)", pic: "9(13)", start: 552, len: 13, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "EFECTO_EN_RESULTADOS_REALIZADOS", pic: "-9(13)", start: 565, len: 14, kind: num, dec: 0, signed: true, prov: official}
+        - {name: "TSA", pic: "X(02)", start: 579, len: 2, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "METOD_CLASIF_VALORIZ_EEFF", pic: "X(6)", start: 581, len: 6, kind: text, dec: 0, signed: false, prov: official}
+      "6":
+        name: PACTOS
+        cardinality: many
+        fields:
+        - {name: "TIPO", pic: "9(01)", start: 0, len: 1, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "TIPO_OPERACION", pic: "X(10)", start: 1, len: 10, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "FOLIO_OPERACION", pic: "9(10)", start: 11, len: 10, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "ITEM_OPERACION", pic: "9(03)", start: 21, len: 3, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "FECHA_DE_LAOPERACION", pic: "9(08)", start: 24, len: 8, kind: date, dec: 0, signed: false, prov: official}
+        - {name: "FECHA_DE_VENCIMIENTO_DEL_CONTRATO", pic: "9(08)", start: 32, len: 8, kind: date, dec: 0, signed: false, prov: official}
+        - {name: "TASA_PACTO", pic: "9(10)V9(03)", start: 40, len: 13, kind: num, dec: 3, signed: false, prov: official}
+        - {name: "NOMBRE", pic: "X(60)", start: 53, len: 60, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "NACIONALIDAD", pic: "X(02)", start: 113, len: 2, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "RELACIONADO", pic: "X(02)", start: 115, len: 2, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "ACTIVO_OBJETO(nombre)", pic: "X(30)", start: 117, len: 30, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "SERIE_ACTIVO_OBJETO", pic: "X(30)", start: 147, len: 30, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "NRO_RUT_ACTIVOOBJETO", pic: "9(09)", start: 177, len: 9, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "DIG_RUT_ACTIVO_OBJETO", pic: "X(01)", start: 186, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "VALOR_NOMINAL", pic: "9(13)V9(03)", start: 187, len: 16, kind: num, dec: 3, signed: false, prov: official}
+        - {name: "TIR_COMPRA", pic: "-9(10)V9(03)", start: 203, len: 14, kind: num, dec: 3, signed: true, prov: official}
+        - {name: "TASA_EMISION", pic: "-9(10)V9(03)", start: 217, len: 14, kind: num, dec: 3, signed: true, prov: official}
+        - {name: "ACTIVO_OBJETO(monto)(M$)", pic: "9(13)", start: 231, len: 13, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "MONEDA", pic: "X(06)", start: 244, len: 6, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "TASA_O_PRECIO_DE_MERCADO", pic: "-9(10)V9(03)", start: 250, len: 14, kind: num, dec: 3, signed: true, prov: official}
+        - {name: "VALOR_DE_MERCADO_A_LA_FECHA_DE_SUSCRIPCION(monto)", pic: "9(13)V9(03)", start: 264, len: 16, kind: num, dec: 3, signed: false, prov: official}
+        - {name: "VALOR_INICIAL_UM", pic: "9(13)V9(03)", start: 280, len: 16, kind: num, dec: 3, signed: false, prov: official}
+        - {name: "VALOR_PACTADO", pic: "9(13)V9(03)", start: 296, len: 16, kind: num, dec: 3, signed: false, prov: official}
+        - {name: "INTERES_DEVENGADO_DEL_PACTOM$(OtrosActivos)", pic: "9(13)", start: 312, len: 13, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "VALORIZACION_DE_PACTO_A_LA_FECHA_DE_CIERRE", pic: "9(13)", start: 325, len: 13, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "VALOR_DE_MERCADO_A_LA_FECHA_DE_INFORMACION(monto)(M$)", pic: "9(13)", start: 338, len: 13, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "TSA", pic: "X(02)", start: 351, len: 2, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "METOD_CLASIF_VALORIZ_EEFF", pic: "X(6)", start: 353, len: 6, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "FILLER", pic: "X(228)", start: 359, len: 228, kind: text, dec: 0, signed: false, prov: official}
+      "7":
+        name: TOTALES
+        cardinality: exactly_one_last
+        control: {field: TOTAL_REGISTROS, rule: equals_total_lines_in_file}
+        fields:
+        - {name: "TIPO", pic: "9(01)", start: 0, len: 1, kind: num, dec: 0, signed: false, prov: verified}
+        - {name: "TOTAL_REGISTROS", pic: "9(06)", start: 1, len: 6, kind: num, dec: 0, signed: false, prov: verified}
+        - {name: "FILLER", pic: "X(580)", start: 7, len: 580, kind: text, dec: 0, signed: false, prov: verified}
+
+  # ---------------------------------------------------------------------------
+  # B.14 GARANTIAS DE DERIVADOS  ->  GaammddG.<RUT>   (300 caracteres)
+  #      Colateral recibido y entregado por operaciones de derivados vigentes.
+  #      Se enlaza con B.7 por IDENTIFICADOR_GARANTIA.
+  # ---------------------------------------------------------------------------
+  G:
+    anexo: "B.14"
+    descripcion: "Garantias de Derivados (colateral)"
+    record_length: 300
+    record_length_status: official_not_yet_seen_in_data
+    record_types:
+      "1":
+        name: IDENTIFICACION
+        cardinality: exactly_one_first
+        fields:
+        - {name: "TIPO", pic: "9(01)", start: 0, len: 1, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "RUT", pic: "9(09)", start: 1, len: 9, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "VERIFICADOR", pic: "X(01)", start: 10, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "", pic: "X(60)", start: 11, len: 60, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "PERIODO", pic: "9(06)", start: 71, len: 6, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "FILLER", pic: "X(223)", start: 77, len: 223, kind: text, dec: 0, signed: false, prov: official}
+      "2":
+        name: DETALLE_GARANTIAS
+        cardinality: many
+        fields:
+        - {name: "TIPO", pic: "9(01)", start: 0, len: 1, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "RUT_CONTRAPARTE_NACIONAL", pic: "9(09)", start: 1, len: 9, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "DV_CONTRAPARTE_NACIONAL", pic: "X(01)", start: 10, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "LEI_CONTRAPARTE_EXTRANJERA", pic: "X(20)", start: 11, len: 20, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "NOMBRE_CONTRAPARTE_GARANTIA", pic: "X(100)", start: 31, len: 100, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "NACIONALIDAD_CONTRAPARTE_GARANTIA", pic: "X(02)", start: 131, len: 2, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "RELACIONADO", pic: "X(02)", start: 133, len: 2, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "POSICION_COMPANIA", pic: "X(02)", start: 135, len: 2, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "TIPO_GARANTIA", pic: "X(02)", start: 137, len: 2, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "IDENTIFICADOR_GARANTIA", pic: "X(14)", start: 139, len: 14, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "TIPO_ACTIVO_EN_GARANTIA", pic: "X(10)", start: 153, len: 10, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "FOLIO_INSTRUMENTO_EN_GARANTIA", pic: "9(10)", start: 163, len: 10, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "ITEM_INSTRUMENTO_EN_GARANTIA", pic: "9(03)", start: 173, len: 3, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "VALOR_NOMINAL_INSTRUMENTO_EN_GARANTIA", pic: "9(13)V9(04)", start: 176, len: 17, kind: num, dec: 4, signed: false, prov: official}
+        - {name: "CODIGO_IDENTIFICACION_INSTRUMENTO_EN_GARANTIA", pic: "X(30)", start: 193, len: 30, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "MONEDA_DENOMINACION_ACTIVO_EN_GARANTIA", pic: "X(06)", start: 223, len: 6, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "CLASIFICACION_DE_RIESGO_PAIS", pic: "X(4)", start: 229, len: 4, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "VALOR_CONTABLE_ACTIVO_EN_GARANTIA_UM", pic: "9(13)V9(04)", start: 233, len: 17, kind: num, dec: 4, signed: false, prov: official}
+        - {name: "VALOR_CONTABLE_ACTIVO_EN_GARANTIA_M$", pic: "9(13)", start: 250, len: 13, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "VALOR_RAZONABLE_ACTIVO_EN_GARANTIA_UM", pic: "9(13)V9(04)", start: 263, len: 17, kind: num, dec: 4, signed: false, prov: official}
+        - {name: "VALOR_RAZONABLE_ACTIVO_EN_GARANTIA_M$", pic: "9(13)", start: 280, len: 13, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "CUENTA_EEFF_DE_REGISTRO_DE_LA_GARANTIA", pic: "9(07)", start: 293, len: 7, kind: num, dec: 0, signed: false, prov: official}
+      "3":
+        name: TOTALES
+        cardinality: exactly_one_last
+        control: {field: TOTAL_REGISTROS, rule: equals_total_lines_in_file}
+        fields:
+        - {name: "TIPO", pic: "9(01)", start: 0, len: 1, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "TOTAL", pic: "9(06)", start: 1, len: 6, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "FILLER", pic: "X(293)", start: 7, len: 293, kind: text, dec: 0, signed: false, prov: official}
+
+  # ---------------------------------------------------------------------------
+  # Pendientes de transcribir (pagina del anexo consolidado indicada).
+  # El motor los detecta, valida el trailer de control y conserva la linea
+  # cruda en `_raw`: la ingesta nunca se cae por un layout faltante.
+  # ---------------------------------------------------------------------------
+  A:
+    anexo: "B.2"
+    descripcion: "Acciones SA y cuotas FFII"
+    record_length: 572
+    record_length_status: measured
+    record_types:
+      "1":
+        name: IDENTIFICACION
+        fields:
+        - {name: "TIPO", pic: "9(01)", start: 0, len: 1, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "RUT", pic: "9(09)", start: 1, len: 9, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "VERIFICADOR", pic: "X(01)", start: 10, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "NOMBRE", pic: "X(60)", start: 11, len: 60, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "PERIODO", pic: "9(06)", start: 71, len: 6, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "FILLER", pic: "X(495)", start: 77, len: 495, kind: text, dec: 0, signed: false, prov: official}
+      "2":
+        name: DETALLE
+        fields:
+        - {name: "TIPO", pic: "9(01)", start: 0, len: 1, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "RUT", pic: "9(09)", start: 1, len: 9, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "VERIFICADOR", pic: "X(01)", start: 10, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "RUN", pic: "9(09)", start: 11, len: 9, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "VERIFICADOR_RUN", pic: "X(01)", start: 20, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "RUT_FONDO_P", pic: "9(09)", start: 21, len: 9, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "DV_RUT_FONDO_P", pic: "X(01)", start: 30, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "NOMBRE_FONDO_P", pic: "X(30)", start: 31, len: 30, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "TIPO_INSTRUMENTO", pic: "X(10)", start: 61, len: 10, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "NEMOTECNICO", pic: "X(60)", start: 71, len: 60, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "SERIE", pic: "X(30)", start: 131, len: 30, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "UNIDADES", pic: "9(13)V9(04)", start: 161, len: 17, kind: num, dec: 4, signed: false, prov: official}
+        - {name: "PRES_BURSATIL", pic: "9(03)V9(02)", start: 178, len: 5, kind: num, dec: 2, signed: false, prov: official}
+        - {name: "CODIGO_ACTIVIDAD_ECONOMICA", pic: "9(06)", start: 183, len: 6, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "VALOR_COSTO", pic: "9(13)", start: 189, len: 13, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "VALOR_LIBRO", pic: "9(13)", start: 202, len: 13, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "VALOR_BOLSA", pic: "9(13)", start: 215, len: 13, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "VALOR_RAZONABLE", pic: "9(13)", start: 228, len: 13, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "DETERIORO", pic: "-9(13)", start: 241, len: 14, kind: num, dec: 0, signed: true, prov: official}
+        - {name: "EFECTO_PATRIMONIO", pic: "X(02)", start: 255, len: 2, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "PROVISION_VOLUNTARIA", pic: "-9(13)", start: 257, len: 14, kind: num, dec: 0, signed: true, prov: official}
+        - {name: "VALOR_FINAL", pic: "9(13)", start: 271, len: 13, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "UNIDAD_MONETARIA", pic: "X(06)", start: 284, len: 6, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "AJUSTE_A_VALOR_ECONOMICO", pic: "X(01)", start: 290, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "PROHIBICION", pic: "X(01)", start: 291, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "ACTIVO_EN_MARGEN", pic: "X(10)", start: 292, len: 10, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "UNIDADES_EN_MARGEN", pic: "9(13)V9(04)", start: 302, len: 17, kind: num, dec: 4, signed: false, prov: official}
+        - {name: "ACCION_EN_PRESTAMO", pic: "X(01)", start: 319, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "UNIDADES_EN_PRESTAMO", pic: "9(13)", start: 320, len: 13, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "ACTIVO_RESPALDA_RESERVA_VALOR_DE_FONDO", pic: "X(05)", start: 333, len: 5, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "NOMBRE_DEL_FONDO", pic: "X(30)", start: 338, len: 30, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "NOMBRE_CARTERA", pic: "X(30)", start: 368, len: 30, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "CUSTODIA_INV", pic: "X(03)", start: 398, len: 3, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "NOMBRE_CUSTODIO", pic: "X(60)", start: 401, len: 60, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "SUSCEPTIBLES_DE_CUSTODIA", pic: "X(01)", start: 461, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "RELACIONADO", pic: "X(02)", start: 462, len: 2, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "FILIAL_COLIGADA", pic: "X(2)", start: 464, len: 2, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "PARTICIPACION_PORCENTUAL", pic: "9(03)V9(02)", start: 466, len: 5, kind: num, dec: 2, signed: false, prov: official}
+        - {name: "PATRIMONIO_FILIAL", pic: "-9(13)", start: 471, len: 14, kind: num, dec: 0, signed: true, prov: official}
+        - {name: "RESULTADO_DE_LA_SOCIEDAD_FILIAL", pic: "-9(13)", start: 485, len: 14, kind: num, dec: 0, signed: true, prov: official}
+        - {name: "CLASIFICACION_DE_RIESGO", pic: "X(15)", start: 499, len: 15, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "SIMULTANEA", pic: "X(03)", start: 514, len: 3, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "TSA", pic: "X(02)", start: 517, len: 2, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "COBERTURA", pic: "X(05)", start: 519, len: 5, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "METOD_CLASIF_VALORIZ_EEFF", pic: "X(6)", start: 524, len: 6, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "CRITERIO_VALORIZACION", pic: "X(02)", start: 530, len: 2, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "MODELO_VALORACION", pic: "X(02)", start: 532, len: 2, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "MODELO_PROPIO_DETERIORO", pic: "X(02)", start: 534, len: 2, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "SUBYACENTE", pic: "X(10)", start: 536, len: 10, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "TIPO_FONDO_ACC", pic: "X(02)", start: 546, len: 2, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "SEGMENTO_FONDO", pic: "X(02)", start: 548, len: 2, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "TIPO_INMOBILIARIO", pic: "X(02)", start: 550, len: 2, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "CUOTAS_SUSCRITAS", pic: "9(12)", start: 552, len: 12, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "PORCENTAJE_PARTICIPACION", pic: "9(03)V9(02)", start: 564, len: 5, kind: num, dec: 2, signed: false, prov: official}
+        - {name: "DESARROLLO_AVANCE", pic: "X(02)", start: 569, len: 2, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "TIPO_GESTION", pic: "X(01)", start: 571, len: 1, kind: text, dec: 0, signed: false, prov: official}
+      "3":
+        name: TOTALES
+        fields:
+        - {name: "TIPO", pic: "9(01)", start: 0, len: 1, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "TOTAL", pic: "9(06)", start: 1, len: 6, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "FILLER", pic: "X(565)", start: 7, len: 565, kind: text, dec: 0, signed: false, prov: official}
+  F:
+    anexo: "B.3"
+    descripcion: "Cuotas de Fondos Mutuos"
+    record_length: 361
+    record_length_status: measured
+    record_types:
+      "1":
+        name: IDENTIFICACION
+        fields:
+        - {name: "TIPO", pic: "9(01)", start: 0, len: 1, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "RUT", pic: "9(09)", start: 1, len: 9, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "VERIFICADOR", pic: "X(01)", start: 10, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "NOMBRE", pic: "X(60)", start: 11, len: 60, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "PERIODO", pic: "9(06)", start: 71, len: 6, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "FILLER", pic: "X(284)", start: 77, len: 284, kind: text, dec: 0, signed: false, prov: official}
+      "2":
+        name: DETALLE
+        fields:
+        - {name: "TIPO", pic: "9(01)", start: 0, len: 1, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "RUT_ADMINISTRADORA", pic: "9(09)", start: 1, len: 9, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "VERIFICADOR_ADMINISTRADORA", pic: "X(01)", start: 10, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "RUN", pic: "9(09)", start: 11, len: 9, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "VERIFICADOR", pic: "X(01)", start: 20, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "TIPO_INSTRUMENTO", pic: "X(10)", start: 21, len: 10, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "NEMOTECNICO", pic: "X(10)", start: 31, len: 10, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "TIPO_FONDO", pic: "X(02)", start: 41, len: 2, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "SERIE", pic: "X(30)", start: 43, len: 30, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "UNIDADES", pic: "9(13)V9(04)", start: 73, len: 17, kind: num, dec: 4, signed: false, prov: official}
+        - {name: "UNIDAD_MONETARIA", pic: "X(06)", start: 90, len: 6, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "VALOR_CUOTA", pic: "9(13)V9(04)", start: 96, len: 17, kind: num, dec: 4, signed: false, prov: official}
+        - {name: "VALOR_DE_INVERSION", pic: "9(13)", start: 113, len: 13, kind: num, dec: 0, signed: false, prov: needs_calibration}
+        - {name: "VALOR_RAZONABLE", pic: "9(13)", start: 126, len: 13, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "DETERIORO", pic: "-9(13)", start: 139, len: 14, kind: num, dec: 0, signed: true, prov: official}
+        - {name: "VALOR_FINAL", pic: "9(12)", start: 153, len: 12, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "PROHIBICION_O_GRAVAMEN", pic: "X(01)", start: 165, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "ACTIVO_EN_MARGEN", pic: "X(10)", start: 166, len: 10, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "UNIDADES_EN_MARGEN", pic: "9(13)V9(04)", start: 176, len: 17, kind: num, dec: 4, signed: false, prov: official}
+        - {name: "ACTIVO_RESPALDA_RESERVA_VALOR_DE_FONDO", pic: "X(05)", start: 193, len: 5, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "NOMBRE_DEL_FONDO", pic: "X(30)", start: 198, len: 30, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "NOMBRE_CARTERA", pic: "X(30)", start: 228, len: 30, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "CUSTODIA_INV", pic: "X(03)", start: 258, len: 3, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "NOMBRE_CUSTODIO", pic: "X(60)", start: 261, len: 60, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "SUSCEPTIBLES_DE_CUSTODIA", pic: "X(01)", start: 321, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "RELACIONADO", pic: "X(02)", start: 322, len: 2, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "CLASIFICACION_DE_RIESGO", pic: "X(15)", start: 324, len: 15, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "TSA", pic: "X(02)", start: 339, len: 2, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "COBERTURA", pic: "X(05)", start: 341, len: 5, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "SIMULTANEA", pic: "X(03)", start: 346, len: 3, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "METOD_CLASIF_VALORIZ_EEFF", pic: "X(6)", start: 349, len: 6, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "CRITERIO_VALORIZACION", pic: "X(02)", start: 355, len: 2, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "MODELO_VALORACION", pic: "X(02)", start: 357, len: 2, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "MODELO_PROPIO_DETERIORO", pic: "X(02)", start: 359, len: 2, kind: text, dec: 0, signed: false, prov: official}
+      "3":
+        name: TOTALES
+        fields:
+        - {name: "TIPO", pic: "9(01)", start: 0, len: 1, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "TOTAL", pic: "9(06)", start: 1, len: 6, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "FILLER", pic: "X(354)", start: 7, len: 354, kind: text, dec: 0, signed: false, prov: official}
+  B:
+    anexo: "B.4"
+    descripcion: "Bienes Raices"
+    record_length: 506
+    record_length_status: measured
+    record_types:
+      "1":
+        name: IDENTIFICACION
+        fields:
+        - {name: "TIPO", pic: "9(01)", start: 0, len: 1, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "RUT", pic: "9(09)", start: 1, len: 9, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "VERIFICADOR", pic: "X(01)", start: 10, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "NOMBRE", pic: "X(60)", start: 11, len: 60, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "PERIODO", pic: "9(06)", start: 71, len: 6, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "FILLER", pic: "X(429)", start: 77, len: 429, kind: text, dec: 0, signed: false, prov: official}
+      "2":
+        name: DETALLE
+        fields:
+        - {name: "TIPO", pic: "9(01)", start: 0, len: 1, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "ROLDESCRIPCION_DEL_INMUEBLE", pic: "X(11)", start: 1, len: 11, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "CAMPO_12", pic: "X(01)", start: 12, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "CAMPO_13", pic: "X(01)", start: 13, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "CAMPO_14", pic: "X(01)", start: 14, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "CAMPO_15", pic: "X(01)", start: 15, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "CAMPO_16", pic: "X(01)", start: 16, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "CAMPO_17", pic: "X(01)", start: 17, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "CAMPO_18", pic: "X(01)", start: 18, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "CAMPO_19", pic: "X(01)", start: 19, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "CAMPO_20", pic: "X(01)", start: 20, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "CAMPO_21", pic: "X(01)", start: 21, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "CAMPO_22", pic: "X(01)", start: 22, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "CAMPO_23", pic: "X(01)", start: 23, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "DESARROLLO_AVANCE", pic: "X(02)", start: 24, len: 2, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "TIPO_GESTION", pic: "X(01)", start: 26, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "TIPO_DE_INMUEBLE", pic: "X(02)", start: 27, len: 2, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "DESTINO", pic: "X(02)", start: 29, len: 2, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "USO", pic: "X(01)", start: 31, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "PORCENTAJE_USO_PROPIO", pic: "9(03)V9(02)", start: 32, len: 5, kind: num, dec: 2, signed: false, prov: official}
+        - {name: "TIPO_INSTRUMENTO", pic: "X(10)", start: 37, len: 10, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "CODIGO_NEMOTECNICO", pic: "X(30)", start: 47, len: 30, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "ARRENDATARIO", pic: "X(60)", start: 77, len: 60, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "RELACIONADO", pic: "X(02)", start: 137, len: 2, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "SALDO_PLAZO_ARRIENDO", pic: "9(03)", start: 139, len: 3, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "MONTO_ARRIENDO", pic: "9(04)V9(02)", start: 142, len: 6, kind: num, dec: 2, signed: false, prov: official}
+        - {name: "UBICACION", pic: "X(40)", start: 148, len: 40, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "COMUNA", pic: "X(03)", start: 188, len: 3, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "CIUDAD", pic: "X(30)", start: 191, len: 30, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "FECHA_DE_COMPRA", pic: "9(08)", start: 221, len: 8, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "COMPRA_ENTIDAD_RELACIONADA", pic: "X(01)", start: 229, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "COSTO_ACTUALIZADO", pic: "9(11)", start: 230, len: 11, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "DEPRECIACION_ACUMULADA", pic: "9(11)", start: 241, len: 11, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "PLAZO", pic: "9(04)", start: 252, len: 4, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "COSTO_CORREGIDO_Y_DEPRECIADO", pic: "9(11)", start: 256, len: 11, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "TASACION_1", pic: "9(11)", start: 267, len: 11, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "TASACION_2", pic: "9(11)", start: 278, len: 11, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "NOMBRE_DEL_TASADOR_1", pic: "X(40)", start: 289, len: 40, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "NOMBRE_DEL_TASADOR_2", pic: "X(40)", start: 329, len: 40, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "FECHA_TASACION_1", pic: "9(08)", start: 369, len: 8, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "FECHA_TASACION_2", pic: "9(08)", start: 377, len: 8, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "TOTAL_M2_TERRENO", pic: "9(7)", start: 385, len: 7, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "TOTAL_M2_CONSTRUCCION", pic: "9(7)", start: 392, len: 7, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "VALOR_TASACION_TERRENO_M2", pic: "9(04)V9(02)", start: 399, len: 6, kind: num, dec: 2, signed: false, prov: official}
+        - {name: "VALOR_TASACION_CONSTRUCCION_M2", pic: "9(04)V9(02)", start: 405, len: 6, kind: num, dec: 2, signed: false, prov: official}
+        - {name: "DETERIORO", pic: "9(11)", start: 411, len: 11, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "VALOR_FINAL", pic: "9(12)", start: 422, len: 12, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "COPROPIETARIA", pic: "9(02)V9(02)", start: 434, len: 4, kind: num, dec: 2, signed: false, prov: official}
+        - {name: "PROHIBICION_O_GRAVAMEN", pic: "X(01)", start: 438, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "ACTIVO_RESPALDA_RESERVA_VALOR_DE_FONDO", pic: "X(05)", start: 439, len: 5, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "NOMBRE_DEL_FONDO", pic: "X(30)", start: 444, len: 30, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "NOMBRE_CARTERA", pic: "X(30)", start: 474, len: 30, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "TSA", pic: "X(02)", start: 504, len: 2, kind: text, dec: 0, signed: false, prov: official}
+      "3":
+        name: TOTALES
+        fields:
+        - {name: "TIPO", pic: "9(01)", start: 0, len: 1, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "TOTAL", pic: "9(06)", start: 1, len: 6, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "FILLER", pic: "X(499)", start: 7, len: 499, kind: text, dec: 0, signed: false, prov: official}
+  X:
+    anexo: "B.5"
+    descripcion: "Inversiones en el Extranjero"
+    record_length: 611
+    record_length_status: measured
+    record_types:
+      "1":
+        name: IDENTIFICACION
+        fields:
+        - {name: "TIPO", pic: "9(01)", start: 0, len: 1, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "RUT", pic: "9(09)", start: 1, len: 9, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "VERIFICADOR", pic: "X(01)", start: 10, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "NOMBRE", pic: "X(60)", start: 11, len: 60, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "PERIODO", pic: "9(06)", start: 71, len: 6, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "FILLER", pic: "X(534)", start: 77, len: 534, kind: text, dec: 0, signed: false, prov: official}
+      "2":
+        name: DETALLE_RF
+        fields:
+        - {name: "TIPO", pic: "9(01)", start: 0, len: 1, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "FOLIO_OPERACION", pic: "9(10)", start: 1, len: 10, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "ITEM_OPERACION", pic: "9(03)", start: 11, len: 3, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "TIPO_INSTRUMENTO", pic: "X(10)", start: 14, len: 10, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "VALOR_NOMINAL", pic: "9(11)V9(04)", start: 24, len: 15, kind: num, dec: 4, signed: false, prov: official}
+        - {name: "PAIS", pic: "X(02)", start: 39, len: 2, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "PAIS_MATRIZ", pic: "X(02)", start: 41, len: 2, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "ESTADO_GARANTE", pic: "X(02)", start: 43, len: 2, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "NOMBRE_DEL_EMISOR", pic: "X(40)", start: 45, len: 40, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "CODIGO_INDIVIDUALIZACION_O_NEMOTECNICO", pic: "X(30)", start: 85, len: 30, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "MONEDA", pic: "X(06)", start: 115, len: 6, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "FECHA_EMISION", pic: "9(08)", start: 121, len: 8, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "FECHA_COMPRA", pic: "9(08)", start: 129, len: 8, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "FECHA_VENCIMIENTO", pic: "9(08)", start: 137, len: 8, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "PLAZO_ALVENCIMIENTO", pic: "9(03)", start: 145, len: 3, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "DURACION", pic: "9(02)V9(02)", start: 148, len: 4, kind: num, dec: 2, signed: false, prov: official}
+        - {name: "TIPO_AMORTIZACION", pic: "9(02)", start: 152, len: 2, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "TIPO_NOMINALES", pic: "X(01)", start: 154, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "TRATAMIENTO", pic: "X(02)", start: 155, len: 2, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "TASA_EMISION", pic: "-9(03)V9(04)", start: 157, len: 8, kind: num, dec: 4, signed: true, prov: official}
+        - {name: "TASA_DE_INTERES", pic: "X(20)", start: 165, len: 20, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "TASA_BASE", pic: "X(12)", start: 185, len: 12, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "VALOR_COMPRA", pic: "9(13)", start: 197, len: 13, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "TIR_DE_COMPRA", pic: "-9(03)V9(04)", start: 210, len: 8, kind: num, dec: 4, signed: true, prov: official}
+        - {name: "VALOR_PRESENTE_TIR_DE_COMPRA", pic: "9(13)", start: 218, len: 13, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "TIR_MERCADO", pic: "-9(03)V9(04)", start: 231, len: 8, kind: num, dec: 4, signed: true, prov: official}
+        - {name: "VALOR_RAZONABLE", pic: "9(13)", start: 239, len: 13, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "DETERIORO", pic: "-9(13)", start: 252, len: 14, kind: num, dec: 0, signed: true, prov: official}
+        - {name: "VALOR_FINAL", pic: "9(12)", start: 266, len: 12, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "PROHIBICION", pic: "X(01)", start: 278, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "CLASIFICACION_DE_RIESGO", pic: "X(15)", start: 279, len: 15, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "INCREMENTO_RIESGO", pic: "X(01)", start: 294, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "ACTIVO_EN_MARGEN_O_SUJETO_A_PACTO", pic: "X(10)", start: 295, len: 10, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "ACTIVO_COMPRADO_A_TRAVES_DE_CDV", pic: "X(03)", start: 305, len: 3, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "ACTIVO_RESPALDA_RESERVA_VALOR_DE_FONDO", pic: "X(05)", start: 308, len: 5, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "NOMBRE_DEL_FONDO", pic: "X(30)", start: 313, len: 30, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "NOMBRE_CARTERA", pic: "X(30)", start: 343, len: 30, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "RELACIONADO", pic: "X(02)", start: 373, len: 2, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "CLASIFICACION_INVERSION", pic: "X(01)", start: 375, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "TSA", pic: "X(02)", start: 376, len: 2, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "COBERTURA", pic: "X(05)", start: 378, len: 5, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "METOD_CLASIF_VALORIZ_EEFF", pic: "X(6)", start: 383, len: 6, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "CRITERIO_VALORIZACION", pic: "X(02)", start: 389, len: 2, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "EFECTO_PATRIMONIO", pic: "X(02)", start: 391, len: 2, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "MODELO_VALORACION", pic: "X(02)", start: 393, len: 2, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "MODELO_PROPIO_DETERIORO", pic: "X(02)", start: 395, len: 2, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "CUSTODIADO", pic: "X(01)", start: 397, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "NOMBRE_CUSTODIO", pic: "X(60)", start: 398, len: 60, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "CLASIFICACION_DE_RIESGO_PAIS", pic: "X(4)", start: 458, len: 4, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "REGULADOR", pic: "X(40)", start: 462, len: 40, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "FILLER", pic: "X(109)", start: 502, len: 109, kind: text, dec: 0, signed: false, prov: official}
+      "3":
+        name: DETALLE_RV
+        fields:
+        - {name: "TIPO", pic: "9(01)", start: 0, len: 1, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "TIPO_INSTRUMENTO", pic: "X(10)", start: 1, len: 10, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "PAIS", pic: "X(02)", start: 11, len: 2, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "PAIS_MATRIZ", pic: "X(02)", start: 13, len: 2, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "BOLSA", pic: "X(20)", start: 15, len: 20, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "RUT_ADMINISTRADORA", pic: "9(09)", start: 35, len: 9, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "VERIFICADOR", pic: "X(01)", start: 44, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "RUN", pic: "9(09)", start: 45, len: 9, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "VERIFICADOR_RUN", pic: "X(01)", start: 54, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "NOMBRE_EMISOR", pic: "X(60)", start: 55, len: 60, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "RUT_FONDO_P", pic: "9(09)", start: 115, len: 9, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "DV_RUT_FONDO_P", pic: "X(01)", start: 124, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "NOMBRE_FONDO_P", pic: "X(30)", start: 125, len: 30, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "CODIGO_INDIVIDUALIZACION_O_NEMOTECNICO", pic: "X(30)", start: 155, len: 30, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "SERIE", pic: "X(30)", start: 185, len: 30, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "MONEDA", pic: "X(06)", start: 215, len: 6, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "TIPO_FONDO", pic: "X(02)", start: 221, len: 2, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "SEGMENTO_FONDO", pic: "X(02)", start: 223, len: 2, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "TIPO_INMOBILIARIO", pic: "X(02)", start: 225, len: 2, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "SUBYACENTE", pic: "X(10)", start: 227, len: 10, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "UNIDADES", pic: "9(13)V9(04)", start: 237, len: 17, kind: num, dec: 4, signed: false, prov: official}
+        - {name: "CUOTAS_SUSCRITAS", pic: "9(12)", start: 254, len: 12, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "PORCENTAJE_PARTICIPACION", pic: "9(03)V9(02)", start: 266, len: 5, kind: num, dec: 2, signed: false, prov: official}
+        - {name: "REQUISITO_PRESENCIA", pic: "X(10)", start: 271, len: 10, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "VALOR_BURSATIL_UNITARIO", pic: "9(11)V9(04)", start: 281, len: 15, kind: num, dec: 4, signed: false, prov: official}
+        - {name: "VALOR_LIBRO", pic: "9(11)", start: 296, len: 11, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "VALOR_BURSATIL", pic: "9(11)", start: 307, len: 11, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "COSTO_HISTORICO", pic: "9(11)", start: 318, len: 11, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "VALOR_CUOTA", pic: "9(11)V9(02)", start: 329, len: 13, kind: num, dec: 2, signed: false, prov: official}
+        - {name: "VALOR_RAZONABLE", pic: "9(13)", start: 342, len: 13, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "VALOR_FINAL", pic: "9(12)", start: 355, len: 12, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "PROHIBICION", pic: "X(01)", start: 367, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "CLASIFICACION_DE_RIESGO", pic: "X(15)", start: 368, len: 15, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "ACTIVO_EN_MARGEN_O_SUJETO_A_PACTO", pic: "X(10)", start: 383, len: 10, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "UNIDADES_EN_MARGEN", pic: "9(13)V9(3)", start: 393, len: 16, kind: num, dec: 3, signed: false, prov: official}
+        - {name: "ACTIVO_COMPRADO_A_TRAVES_DE_CDV", pic: "X(03)", start: 409, len: 3, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "ACTIVO_RESPALDA_RESERVA_VALOR_DE_FONDO", pic: "X(05)", start: 412, len: 5, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "NOMBRE_DEL_FONDO", pic: "X(30)", start: 417, len: 30, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "NOMBRE_CARTERA", pic: "X(30)", start: 447, len: 30, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "RELACIONADO", pic: "X(02)", start: 477, len: 2, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "FILIAL_COLIGADA", pic: "X(2)", start: 479, len: 2, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "CLASIFICACION_INVERSION", pic: "X(01)", start: 481, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "TSA", pic: "X(02)", start: 482, len: 2, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "COBERTURA", pic: "X(05)", start: 484, len: 5, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "EFECTO_PATRIMONIO", pic: "X(02)", start: 489, len: 2, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "METOD_CLASIF_VALORIZ_EEFF", pic: "X(6)", start: 491, len: 6, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "CRITERIO_VALORIZACION", pic: "X(02)", start: 497, len: 2, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "MODELO_VALORACION", pic: "X(02)", start: 499, len: 2, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "MODELO_PROPIO_DETERIORO", pic: "X(02)", start: 501, len: 2, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "CUSTODIADO", pic: "X(01)", start: 503, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "NOMBRE_CUSTODIO", pic: "X(60)", start: 504, len: 60, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "CLASIFICACION_DE_RIESGO_PAIS", pic: "X(4)", start: 564, len: 4, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "REGULADOR", pic: "X(40)", start: 568, len: 40, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "SIMULTANEA", pic: "X(03)", start: 608, len: 3, kind: text, dec: 0, signed: false, prov: official}
+      "4":
+        name: DETALLE_DERIVADOS
+        fields:
+        - {name: "TIPO", pic: "9(01)", start: 0, len: 1, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "TIPO_INSTRUMENTO", pic: "X(10)", start: 1, len: 10, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "PAIS", pic: "X(02)", start: 11, len: 2, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "CLASIFICACION_DE_RIESGO_PAIS", pic: "X(4)", start: 13, len: 4, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "REGULADORDESCRIPCION_DEL_INMUEBLE", pic: "X(40)", start: 17, len: 40, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "CAMPO_57", pic: "X(01)", start: 57, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "CAMPO_58", pic: "X(01)", start: 58, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "CAMPO_59", pic: "X(01)", start: 59, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "CAMPO_60", pic: "X(01)", start: 60, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "CAMPO_61", pic: "X(01)", start: 61, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "CAMPO_62", pic: "X(01)", start: 62, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "CAMPO_63", pic: "X(01)", start: 63, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "CAMPO_64", pic: "X(01)", start: 64, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "CAMPO_65", pic: "X(01)", start: 65, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "CAMPO_66", pic: "X(01)", start: 66, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "CAMPO_67", pic: "X(01)", start: 67, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "CAMPO_68", pic: "X(01)", start: 68, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "TIPO_DE_INMUEBLE", pic: "X(02)", start: 69, len: 2, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "DESTINO", pic: "X(02)", start: 71, len: 2, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "USO", pic: "X(01)", start: 73, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "PORCENTAJE_USO_PROPIO", pic: "9(3)V9(02)", start: 74, len: 5, kind: num, dec: 2, signed: false, prov: official}
+        - {name: "UBICACION", pic: "X(40)", start: 79, len: 40, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "SALDO_PLAZO_ARRIENDO", pic: "9(03)", start: 119, len: 3, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "MONTO_ARRIENDO", pic: "9(04)V9(02)", start: 122, len: 6, kind: num, dec: 2, signed: false, prov: official}
+        - {name: "FECHA_COMPRA", pic: "9(08)", start: 128, len: 8, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "MONEDA", pic: "X(06)", start: 136, len: 6, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "COSTO_HISTORICO_CORREGIDO", pic: "9(11)", start: 142, len: 11, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "DEPRECIACION_ACUMULADA", pic: "9(11)", start: 153, len: 11, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "VALOR_CONTABLE", pic: "9(11)", start: 164, len: 11, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "VALOR_TASACION", pic: "9(11)", start: 175, len: 11, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "FECHA_DE_TASACION", pic: "9(08)", start: 186, len: 8, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "TOTAL_M2_TERRENO", pic: "9(7)", start: 194, len: 7, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "TOTAL_M2_CONSTRUCCION", pic: "9(7)", start: 201, len: 7, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "VALOR_TASACION_TERRENO_M2", pic: "9(04)V9(02)", start: 208, len: 6, kind: num, dec: 2, signed: false, prov: official}
+        - {name: "VALOR_TASACION_CONSTRUCCION_M2", pic: "9(04)V9(02)", start: 214, len: 6, kind: num, dec: 2, signed: false, prov: official}
+        - {name: "DETERIORO", pic: "-9(11)", start: 220, len: 12, kind: num, dec: 0, signed: true, prov: official}
+        - {name: "VALOR_FINAL", pic: "9(12)", start: 232, len: 12, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "ACTIVO_RESPALDA_RESERVA_VALOR_DE_FONDO", pic: "X(05)", start: 244, len: 5, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "NOMBRE_DEL_FONDO", pic: "X(30)", start: 249, len: 30, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "NOMBRE_CARTERA", pic: "X(30)", start: 279, len: 30, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "TSA", pic: "X(02)", start: 309, len: 2, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "FILLER", pic: "X(300)", start: 311, len: 300, kind: text, dec: 0, signed: false, prov: official}
+      "5":
+        name: DETALLE_OTROS
+        fields:
+        - {name: "TIPO", pic: "9(01)", start: 0, len: 1, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "TIPO_INSTRUMENTO", pic: "X(10)", start: 1, len: 10, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "PAIS", pic: "X(02)", start: 11, len: 2, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "CLASIFICACION_DE_RIESGO_PAIS", pic: "X(4)", start: 13, len: 4, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "REGULADOR", pic: "X(40)", start: 17, len: 40, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "NOMBRE_FILIAL", pic: "X(30)", start: 57, len: 30, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "FECHA_COMPRA", pic: "9(08)", start: 87, len: 8, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "PARTICIPACION_PORCENTUAL", pic: "9(03)V9(02)", start: 95, len: 5, kind: num, dec: 2, signed: false, prov: official}
+        - {name: "PATRIMONIO_FILIAL", pic: "-9(13)", start: 100, len: 14, kind: num, dec: 0, signed: true, prov: official}
+        - {name: "RESULTADO_DE_LASOCIEDAD_FILIAL", pic: "-9(13)", start: 114, len: 14, kind: num, dec: 0, signed: true, prov: official}
+        - {name: "FECHA_ESTADOS_FINANCIEROS", pic: "9(08)", start: 128, len: 8, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "VALOR_DE_MERCADO", pic: "9(13)", start: 136, len: 13, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "MAYOR_O_MENOR_VALOR_DE_INVERSIONES", pic: "-9(11)", start: 149, len: 12, kind: num, dec: 0, signed: true, prov: official}
+        - {name: "VALOR_FINAL", pic: "9(12)", start: 161, len: 12, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "TSA", pic: "X(02)", start: 173, len: 2, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "FILLER", pic: "X(436)", start: 175, len: 436, kind: text, dec: 0, signed: false, prov: official}
+      "6":
+        name: TOTALES
+        fields:
+        - {name: "TIPO", pic: "9(01)", start: 0, len: 1, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "TOTAL_REGISTROS", pic: "9(06)", start: 1, len: 6, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "FILLER", pic: "X(604)", start: 7, len: 604, kind: text, dec: 0, signed: false, prov: official}
+  O:
+    anexo: "B.6"
+    descripcion: "Otras Inversiones"
+    record_length: 510
+    record_length_status: measured
+    record_types:
+      "1":
+        name: IDENTIFICACION
+        fields:
+        - {name: "TIPO", pic: "9(01)", start: 0, len: 1, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "RUT", pic: "9(09)", start: 1, len: 9, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "VERIFICADOR", pic: "X(01)", start: 10, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "NOMBRE", pic: "X(60)", start: 11, len: 60, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "PERIODO", pic: "9(06)", start: 71, len: 6, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "FILLER", pic: "X(433)", start: 77, len: 433, kind: text, dec: 0, signed: false, prov: official}
+      "2":
+        name: DETALLE
+        fields:
+        - {name: "TIPO", pic: "9(01)", start: 0, len: 1, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "CODIGO_O_NOMBRE_DE_LA_INVERSION", pic: "X(20)", start: 1, len: 20, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "NEMOTECNICO", pic: "X(30)", start: 21, len: 30, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "PAIS", pic: "X(02)", start: 51, len: 2, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "TIPO_INSTRUMENTO", pic: "X(10)", start: 53, len: 10, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "UNIDAD_MONETARIA", pic: "X(06)", start: 63, len: 6, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "VALOR_COSTO_ACTUALIZADO", pic: "9(11)", start: 69, len: 11, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "DEPRECIACION_ACUMULADA", pic: "9(11)", start: 80, len: 11, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "VALOR_RAZONABLE", pic: "9(13)", start: 91, len: 13, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "DETERIORO", pic: "-9(11)", start: 104, len: 12, kind: num, dec: 0, signed: true, prov: official}
+        - {name: "VALOR_FINAL", pic: "9(12)", start: 116, len: 12, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "PROHIBICION", pic: "X(01)", start: 128, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "CLASIFICACION_DE_RIESGO", pic: "X(15)", start: 129, len: 15, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "ACTIVO_RESPALDA_RESERVA_VALOR_DE_FONDO", pic: "X(05)", start: 144, len: 5, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "NOMBRE_DEL_FONDO", pic: "X(30)", start: 149, len: 30, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "NOMBRE_CARTERA", pic: "X(30)", start: 179, len: 30, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "CUSTODIA_INV", pic: "X(03)", start: 209, len: 3, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "NOMBRE_CUSTODIO", pic: "X(60)", start: 212, len: 60, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "SUSCEPTIBLES_DE_CUSTODIA", pic: "X(01)", start: 272, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "ACTIVO_EN_MARGEN_O_SUJETO_A_PACTO", pic: "X(10)", start: 273, len: 10, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "TSA", pic: "X(02)", start: 283, len: 2, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "METOD_CLASIF_VALORIZ_EEFF", pic: "X(6)", start: 285, len: 6, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "CRITERIO_VALORIZACION", pic: "X(02)", start: 291, len: 2, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "MODELO_VALORACION", pic: "X(02)", start: 293, len: 2, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "MODELO_PROPIO_DETERIORO", pic: "X(02)", start: 295, len: 2, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "FECHA_DE_INFORME", pic: "9(08)", start: 297, len: 8, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "TIPO_DE_ACTIVO", pic: "X(60)", start: 305, len: 60, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "COLIGADA_FILIAL_INMOB", pic: "X(01)", start: 365, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "DESCRIPCION_ACTIVOS", pic: "X(100)", start: 366, len: 100, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "CLASIFICACION_DE_RIESGO_PAIS", pic: "X(4)", start: 466, len: 4, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "REGULADOR", pic: "X(40)", start: 470, len: 40, kind: text, dec: 0, signed: false, prov: official}
+      "3":
+        name: TOTALES
+        fields:
+        - {name: "TIPO", pic: "9(01)", start: 0, len: 1, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "TOTAL_REGISTROS", pic: "9(06)", start: 1, len: 6, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "FILLER", pic: "X(503)", start: 7, len: 503, kind: text, dec: 0, signed: false, prov: official}
+  C:
+    anexo: "B.8"
+    descripcion: "Informacion de Control"
+    record_length: 138
+    record_length_status: measured
+    record_types:
+      "1":
+        name: IDENTIFICACION
+        fields:
+        - {name: "TIPO", pic: "9(01)", start: 0, len: 1, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "RUT", pic: "9(09)", start: 1, len: 9, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "VERIFICADOR", pic: "X(01)", start: 10, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "NOMBRE", pic: "X(60)", start: 11, len: 60, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "PERIODO", pic: "9(06)", start: 71, len: 6, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "FILLER", pic: "X(61)", start: 77, len: 61, kind: text, dec: 0, signed: false, prov: official}
+      "2":
+        name: DETALLE
+        fields:
+        - {name: "TIPO", pic: "9(01)", start: 0, len: 1, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "TIPO_DE_INVERSION", pic: "X(03)", start: 1, len: 3, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "VALOR_FINAL", pic: "9(12)", start: 4, len: 12, kind: num, dec: 0, signed: false, prov: needs_calibration}
+        - {name: "INVERSIONES_REPRESENTATIVAS_DE_RT_PR", pic: "-9(11)", start: 16, len: 12, kind: num, dec: 0, signed: true, prov: official}
+        - {name: "INVERSIONES_NO_REPRESENTATIVAS_DE_RT_PR", pic: "-9(11)", start: 28, len: 12, kind: num, dec: 0, signed: true, prov: official}
+        - {name: "TOTAL_COSTO_AMORTIZADO", pic: "-9(13)", start: 40, len: 14, kind: num, dec: 0, signed: true, prov: official}
+        - {name: "TOTAL_VALOR_RAZONABLE", pic: "-9(13)", start: 54, len: 14, kind: num, dec: 0, signed: true, prov: official}
+        - {name: "TOTAL_EFECTIVO_EQUIVALENTE", pic: "-9(13)", start: 68, len: 14, kind: num, dec: 0, signed: true, prov: official}
+        - {name: "TOTAL_INSTRUMENTOS_CUI_APV", pic: "-9(13)", start: 82, len: 14, kind: num, dec: 0, signed: true, prov: official}
+        - {name: "TOTAL_INST_OTRAS_CLASIF", pic: "-9(13)", start: 96, len: 14, kind: num, dec: 0, signed: true, prov: official}
+        - {name: "TOTAL_SOC_FILIALES", pic: "-9(13)", start: 110, len: 14, kind: num, dec: 0, signed: true, prov: official}
+        - {name: "TOTAL_COLIGADAS", pic: "-9(13)", start: 124, len: 14, kind: num, dec: 0, signed: true, prov: official}
+      "3":
+        name: TOTALES
+        fields:
+        - {name: "TIPO", pic: "9(01)", start: 0, len: 1, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "TOTAL_REGISTROS", pic: "9(06)", start: 1, len: 6, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "FILLER", pic: "X(131)", start: 7, len: 131, kind: text, dec: 0, signed: false, prov: official}
+  D: {anexo: "B.9",  descripcion: "Tablas de Descriptores",        pdf_page: 153, status: PENDING}
+  T: {anexo: "B.10", descripcion: "Tablas de Desarrollo",          pdf_page: 159, status: PENDING}
+  E: {anexo: "B.11", descripcion: "Flujos de Activos Elegibles",   pdf_page: 163, status: PENDING}
+  R: {anexo: "B.12", descripcion: "Prestamos",                     pdf_page: 168, status: PENDING}
+  V: {anexo: "B.13", descripcion: "BR en arriendo y morosidad",    pdf_page: 186, status: PENDING}
