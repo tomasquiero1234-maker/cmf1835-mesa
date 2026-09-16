@@ -1,12 +1,8 @@
-PyYAML>=6.0
-pdfplumber>=0.11
-
-# warehouse
-duckdb>=1.0
-pyarrow>=15
-pandas>=2.0
-
-# dashboard
+# Dependencias de la APLICACION desplegada.
+# Streamlit Community Cloud instala exactamente esto, asi que se mantiene al
+# minimo: la nube corre el dashboard, no el pipeline de ingesta. Las
+# dependencias para regenerar el warehouse estan en requirements-dev.txt.
 streamlit>=1.49
 plotly>=5.22
-altair>=5.3
+pandas>=2.0
+duckdb>=1.0

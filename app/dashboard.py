@@ -26,7 +26,24 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-DB = ROOT / "warehouse" / "data" / "cmf1835.duckdb"
+#: La base completa pesa mas de lo que admite un repositorio publico, asi que
+#: el despliegue viaja con una muestra de los ultimos meses. Se prefiere la
+#: base completa si esta; si no, la muestra. La variable de entorno gana sobre
+#: las dos, para poder apuntar a un volumen montado sin tocar el codigo.
+DB_COMPLETA = ROOT / "warehouse" / "data" / "cmf1835.duckdb"
+DB_SAMPLE = ROOT / "warehouse" / "sample" / "cmf1835_sample.duckdb"
+
+
+def _elegir_db() -> Path:
+    import os
+    if (env := os.environ.get("CMF1835_DB")):
+        return Path(env)
+    if DB_COMPLETA.exists():
+        return DB_COMPLETA
+    return DB_SAMPLE
+
+
+DB = _elegir_db()
 
 st.set_page_config(page_title="Mesa de Dinero -- Circular 1835",
                    page_icon="*", layout="wide",
@@ -34,6 +51,14 @@ st.set_page_config(page_title="Mesa de Dinero -- Circular 1835",
 
 PRODUCTOS = ["FORWARD", "SWAP", "PACTO", "FUTURO", "OPCION"]
 CATEGORIAS = ["ACTIVE", "NEW", "ROLL", "MATURITY", "UNWIND"]
+
+#: Nuestro grupo. Todo el modulo de oportunidades se lee desde aqui: lo que el
+#: cliente hace con otros y no con nosotros es el producto del dashboard.
+BANCO_PROPIO = "BBVA"
+
+#: Producto a nivel util para la mesa. `subtipo` ya separa IRS de CCS, que son
+#: dos libros distintos aunque el anexo los meta en el mismo registro.
+COL_PRODUCTO = "subtipo"
 
 
 # ---------------------------------------------------------------------------
@@ -111,30 +136,37 @@ def _lit(v) -> str:
     return "NULL" if v is None else "'" + str(v).replace("'", "''") + "'"
 
 
-def cl_in(tabla: str, col: str, sel, universo) -> str:
+# Todas las consultas del dashboard leen del hecho con alias `d` y le pegan
+# dim_compania con alias `c`. Las dos tablas tienen rut_compania, asi que un
+# predicado sin calificar es ambiguo y DuckDB rechaza la consulta entera. El
+# prefijo va aqui, en un solo lugar, y no en cada llamada.
+PFX = "d."
+
+
+def cl_in(tabla: str, col: str, sel, universo, pfx: str = PFX) -> str:
     """IN (...) solo si la seleccion recorta algo. Sin seleccion no filtra."""
     if col not in columnas(tabla) or not sel or (universo and len(sel) == len(universo)):
         return ""
-    return f"{col} IN ({', '.join(_lit(v) for v in sel)})"
+    return f"{pfx}{col} IN ({', '.join(_lit(v) for v in sel)})"
 
 
-def cl_rango(tabla: str, col: str, sel, tope) -> str:
+def cl_rango(tabla: str, col: str, sel, tope, pfx: str = PFX) -> str:
     """BETWEEN solo si el usuario movio alguna punta del slider."""
     if col not in columnas(tabla) or not sel or not tope:
         return ""
     lo, hi = sel
     if lo <= tope[0] and hi >= tope[1]:
         return ""
-    return f"{col} BETWEEN {lo} AND {hi}"
+    return f"{pfx}{col} BETWEEN {lo} AND {hi}"
 
 
-def cl_fecha(tabla: str, col: str, sel, tope) -> str:
+def cl_fecha(tabla: str, col: str, sel, tope, pfx: str = PFX) -> str:
     if col not in columnas(tabla) or not sel or not tope or len(sel) != 2:
         return ""
     lo, hi = sel
     if lo <= tope[0] and hi >= tope[1]:
         return ""
-    return f"{col} BETWEEN DATE '{lo}' AND DATE '{hi}'"
+    return f"{pfx}{col} BETWEEN DATE '{lo}' AND DATE '{hi}'"
 
 
 def where(partes: list[str]) -> str:
@@ -201,6 +233,18 @@ def construir_sidebar() -> dict:
         prods = valores("fact_derivado", "producto")
         f["productos"] = st.multiselect("Producto", prods, default=prods)
         f["_productos_all"] = prods
+        for clave, col, etiqueta in [
+            ("subtipos", "subtipo", "Subtipo (IRS / CCS / ...)"),
+            ("subyacente", "subyacente_contrato", "Subyacente del contrato"),
+            ("rol_fija", "rol_tasa_fija", "Rol en la tasa fija"),
+            ("par_monedas", "par_monedas", "Par de monedas"),
+            ("pata_larga", "pata_larga_tipo", "Indice pata larga"),
+            ("pata_corta", "pata_corta_tipo", "Indice pata corta"),
+        ]:
+            vals = valores("fact_derivado", col)
+            if vals:
+                f[clave] = st.multiselect(etiqueta, vals, default=vals)
+                f[f"_{clave}_all"] = vals
 
         for clave, col, etiqueta in [
             ("tipo_operacion", "tipo_operacion", "Tipo de operacion"),
@@ -260,11 +304,18 @@ def construir_sidebar() -> dict:
                                     -3650, 18250, (-3650, 18250), 30,
                                     help="Dias entre el cierre del periodo y el vencimiento. "
                                          "Negativo = ya vencido.")
-        tope = rango("fact_renta_fija", "plazo_al_vencimiento")
+        tope = rango("fact_renta_fija", "plazo_meses")
         if tope:
             f["_plazo_rf_tope"] = tope
-            f["plazo_rf"] = st.slider("Plazo al vencimiento (renta fija)",
-                                      tope[0], tope[1], tope, help="Segun lo informa el propio registro.")
+            f["plazo_rf"] = st.slider("Plazo al vencimiento (renta fija, MESES)",
+                                      tope[0], tope[1], tope,
+                                      help="El anexo informa este plazo en meses, no en dias.")
+        tope = rango("fact_renta_fija", "duracion_modificada_aprox")
+        if tope:
+            f["_duracion_tope"] = tope
+            f["duracion"] = st.slider("Duracion modificada aprox. (anios)", tope[0], tope[1], tope,
+                                      help="Aproximacion bullet: el anexo no trae el calendario "
+                                           "de cupones. Sirve para ordenar, no para un hedge.")
 
     # --- metricas -----------------------------------------------------------
     with sb.expander("Metricas", expanded=False):
@@ -308,7 +359,7 @@ def predicados_derivado(f: dict, *, periodos: list[int] | None = None) -> str:
     t = "fact_derivado"
     per = periodos if periodos is not None else f["periodos"]
     partes = [
-        f"periodo_informacion IN ({', '.join(str(p) for p in per)})" if per else "1=0",
+        f"d.periodo_informacion IN ({', '.join(str(p) for p in per)})" if per else "1=0",
         cl_in(t, "rut_compania", f.get("companias"), f.get("_companias_all")),
         cl_in(t, "contraparte_grupo", f.get("grupos"), f.get("_grupos_all")),
         cl_in(t, "contraparte_key", f.get("contrapartes"), f.get("_contrapartes_all")),
@@ -325,6 +376,12 @@ def predicados_derivado(f: dict, *, periodos: list[int] | None = None) -> str:
         cl_in(t, "tipo_documentacion", f.get("documentacion"), f.get("_documentacion_all")),
         cl_in(t, "clasif_valoriz_eeff", f.get("clasif_eeff"), f.get("_clasif_eeff_all")),
         cl_in(t, "nocional_origen", f.get("nocional_origen"), f.get("_nocional_origen_all")),
+        cl_in(t, "subtipo", f.get("subtipos"), f.get("_subtipos_all")),
+        cl_in(t, "subyacente_contrato", f.get("subyacente"), f.get("_subyacente_all")),
+        cl_in(t, "rol_tasa_fija", f.get("rol_fija"), f.get("_rol_fija_all")),
+        cl_in(t, "par_monedas", f.get("par_monedas"), f.get("_par_monedas_all")),
+        cl_in(t, "pata_larga_tipo", f.get("pata_larga"), f.get("_pata_larga_all")),
+        cl_in(t, "pata_corta_tipo", f.get("pata_corta"), f.get("_pata_corta_all")),
         cl_in(t, "clasificacion_riesgo", f.get("clasif_riesgo"), f.get("_clasif_riesgo_all")),
         cl_in(t, "moneda", f.get("monedas"), f.get("_monedas_all")),
         cl_in(t, "veredicto", f.get("veredictos"), f.get("_veredictos_all")),
@@ -339,21 +396,21 @@ def predicados_derivado(f: dict, *, periodos: list[int] | None = None) -> str:
         cl_rango(t, "tasa_precio_mercado", f.get("tasa_m"), f.get("_tasa_m_tope")),
     ]
     if f.get("confianza_min", 0) > 0:
-        partes.append(f"resolucion_confianza >= {f['confianza_min']}")
+        partes.append(f"d.resolucion_confianza >= {f['confianza_min']}")
     if f.get("solo_resueltas"):
-        partes.append("contraparte_key NOT LIKE 'UNRESOLVED::%'")
+        partes.append("d.contraparte_key NOT LIKE 'UNRESOLVED::%'")
     pl = f.get("plazo_dias")
     if pl and pl != (-3650, 18250):
         partes.append(
-            "DATE_DIFF('day', LAST_DAY(STRPTIME(CAST(periodo_informacion AS VARCHAR)||'01','%Y%m%d')), "
-            f"fecha_vencimiento) BETWEEN {pl[0]} AND {pl[1]}")
+            "DATE_DIFF('day', LAST_DAY(STRPTIME(CAST(d.periodo_informacion AS VARCHAR)||'01','%Y%m%d')), "
+            f"d.fecha_vencimiento) BETWEEN {pl[0]} AND {pl[1]}")
     return where(partes)
 
 
 def predicados_rf(f: dict) -> str:
     t = "fact_renta_fija"
     partes = [
-        f"periodo_informacion IN ({', '.join(str(p) for p in f['periodos'])})" if f["periodos"] else "1=0",
+        f"d.periodo_informacion IN ({', '.join(str(p) for p in f['periodos'])})" if f["periodos"] else "1=0",
         cl_in(t, "rut_compania", f.get("companias"), f.get("_companias_all")),
         cl_in(t, "tipo_instrumento", f.get("tipo_instrumento"), f.get("_tipo_instrumento_all")),
         cl_in(t, "unidad_monetaria", f.get("unidades"), f.get("_unidades_all")),
@@ -363,7 +420,8 @@ def predicados_rf(f: dict) -> str:
         cl_fecha(t, "fecha_emision", f.get("f_emision"), f.get("_f_emision_tope")),
         cl_fecha(t, "fecha_compra", f.get("f_compra"), f.get("_f_compra_tope")),
         cl_fecha(t, "fecha_vencimiento", f.get("f_venc_rf"), f.get("_f_venc_rf_tope")),
-        cl_rango(t, "plazo_al_vencimiento", f.get("plazo_rf"), f.get("_plazo_rf_tope")),
+        cl_rango(t, "plazo_meses", f.get("plazo_rf"), f.get("_plazo_rf_tope")),
+        cl_rango(t, "duracion_modificada_aprox", f.get("duracion"), f.get("_duracion_tope")),
         cl_rango(t, "tir_compra", f.get("tir_c"), f.get("_tir_c_tope")),
         cl_rango(t, "tir_mercado", f.get("tir_mk"), f.get("_tir_mk_tope")),
         cl_rango(t, "tasa_emision", f.get("tasa_em"), f.get("_tasa_em_tope")),
@@ -375,7 +433,7 @@ def predicados_rf(f: dict) -> str:
 def predicados_garantia(f: dict) -> str:
     t = "fact_garantia"
     partes = [
-        f"periodo_informacion IN ({', '.join(str(p) for p in f['periodos'])})" if f["periodos"] else "1=0",
+        f"d.periodo_informacion IN ({', '.join(str(p) for p in f['periodos'])})" if f["periodos"] else "1=0",
         cl_in(t, "rut_compania", f.get("companias"), f.get("_companias_all")),
         cl_in(t, "contraparte_grupo", f.get("grupos"), f.get("_grupos_all")),
         cl_in(t, "contraparte_key", f.get("contrapartes"), f.get("_contrapartes_all")),
@@ -387,7 +445,7 @@ def predicados_garantia(f: dict) -> str:
 def predicados_flujo(f: dict, periodo: int) -> str:
     t = "fact_flujo"
     partes = [
-        f"periodo = {periodo}",
+        f"d.periodo = {periodo}",
         cl_in(t, "rut_compania", f.get("companias"), f.get("_companias_all")),
         cl_in(t, "contraparte_grupo", f.get("grupos"), f.get("_grupos_all")),
         cl_in(t, "contraparte_key", f.get("contrapartes"), f.get("_contrapartes_all")),
@@ -422,8 +480,7 @@ def vista_whitespace(f: dict) -> None:
                SUM(COALESCE(d.nocional_m, 0)) AS nocional_m,
                COUNT(*) AS operaciones
         FROM fact_derivado d {JOIN_COMP}
-        {w.replace('WHERE', 'WHERE') if w else ''}
-        {'AND' if w else 'WHERE'} d.contraparte_grupo IS NOT NULL
+        {w} {'AND' if w else 'WHERE'} d.contraparte_grupo IS NOT NULL
         GROUP BY 1, 2
     """)
     if df.empty:
@@ -594,7 +651,7 @@ def vista_flujos(f: dict) -> None:
         return
 
     w = predicados_flujo(f, per)
-    df = q(f"SELECT * FROM fact_flujo {w}")
+    df = q(f"SELECT d.* FROM fact_flujo d {w}")
     if df.empty:
         st.info("Sin flujos para los filtros elegidos."); return
 
@@ -739,58 +796,417 @@ def vista_garantias(f: dict) -> None:
                        "text/csv")
 
 
+
+
+# ---------------------------------------------------------------------------
+#  modulo de oportunidades
+# ---------------------------------------------------------------------------
+
+def _col_producto() -> str:
+    """`subtipo` si el warehouse ya lo trae; si no, `producto`."""
+    return COL_PRODUCTO if COL_PRODUCTO in columnas("fact_derivado") else "producto"
+
+
+@st.cache_data(show_spinner=False)
+def matriz_competencia(periodos: tuple[int, ...], w_extra: str) -> pd.DataFrame:
+    """Nocional por (aseguradora, producto, grupo bancario).
+
+    Es la materia prima del modulo: con esto se responde que hace cada cliente,
+    en que producto, y con quien.
+    """
+    cp = _col_producto()
+    pers = ", ".join(str(x) for x in periodos) or "0"
+    return q(f"""
+        SELECT {nombre_compania_sql()}            AS aseguradora,
+               d.rut_compania,
+               d.{cp}                             AS producto,
+               d.contraparte_grupo                AS banco,
+               SUM(COALESCE(d.nocional_m, 0))     AS nocional_m,
+               SUM(COALESCE(d.mtm_contrato_m, COALESCE(d.mtm_activo_m,0)-COALESCE(d.mtm_pasivo_m,0))) AS mtm_m,
+               COUNT(*)                           AS operaciones,
+               MIN(d.fecha_vencimiento)           AS primer_vencimiento,
+               MAX(d.fecha_vencimiento)           AS ultimo_vencimiento
+        FROM fact_derivado d {JOIN_COMP}
+        WHERE d.periodo_informacion IN ({pers})
+          AND d.contraparte_grupo IS NOT NULL
+          AND d.{cp} IS NOT NULL
+          {w_extra}
+        GROUP BY 1, 2, 3, 4
+    """)
+
+
+def vista_whitespace2(f: dict) -> None:
+    st.subheader("Whitespace 2.0 -- Competitor Intel")
+    st.caption(f"Que hace cada cliente, en que producto, y con quien. "
+               f"En rojo: lo que hace con la competencia y **no** con {BANCO_PROPIO}.")
+
+    per = tuple(sorted(f["periodos"])[-1:]) if f.get("solo_ultimo") else tuple(f["periodos"])
+    base = matriz_competencia(tuple(f["periodos"]), "")
+    if base.empty:
+        st.info("Sin datos."); return
+    if f.get("companias") and len(f["companias"]) < len(f.get("_companias_all", [])):
+        base = base[base.rut_compania.isin(f["companias"])]
+    if f.get("productos"):
+        base = base[base.producto.notna()]
+
+    foco = f["periodo_foco"]
+    st.caption(f"Periodos considerados: {min(f['periodos'])} a {max(f['periodos'])}.")
+
+    # Estado de cada par (cliente, producto): con nosotros, solo competencia, o nadie.
+    piv = base.pivot_table(index=["aseguradora", "producto"], columns="banco",
+                           values="nocional_m", aggfunc="sum", fill_value=0)
+    if BANCO_PROPIO not in piv.columns:
+        piv[BANCO_PROPIO] = 0.0
+    competencia = [c for c in piv.columns if c != BANCO_PROPIO]
+
+    est = pd.DataFrame({
+        "nocional_propio": piv[BANCO_PROPIO],
+        "nocional_competencia": piv[competencia].sum(axis=1),
+        "bancos_competidores": (piv[competencia] > 0).sum(axis=1),
+    }).reset_index()
+    est["principal_competidor"] = [
+        (piv.loc[i, competencia].idxmax() if piv.loc[i, competencia].max() > 0 else None)
+        for i in piv.index]
+    est["estado"] = est.apply(
+        lambda r: (f"Con {BANCO_PROPIO}" if r.nocional_propio > 0
+                   else ("OPORTUNIDAD" if r.nocional_competencia > 0 else "Sin actividad")),
+        axis=1)
+    est["share_propio_%"] = (100 * est.nocional_propio /
+                             (est.nocional_propio + est.nocional_competencia).replace(0, pd.NA)).round(1)
+
+    c = st.columns(4)
+    c[0].metric("Pares cliente-producto", f"{len(est):,}")
+    c[1].metric(f"Con {BANCO_PROPIO}", f"{(est.estado == f'Con {BANCO_PROPIO}').sum():,}")
+    c[2].metric("OPORTUNIDADES", f"{(est.estado == 'OPORTUNIDAD').sum():,}")
+    c[3].metric("Nocional en manos de la competencia (M$)",
+                f"{est.loc[est.estado == 'OPORTUNIDAD', 'nocional_competencia'].sum():,.0f}")
+
+    # Mapa de calor: -1 oportunidad (rojo), 0 sin actividad, +1 con nosotros (verde).
+    codigo = est.assign(v=est.estado.map({f"Con {BANCO_PROPIO}": 1, "OPORTUNIDAD": -1,
+                                          "Sin actividad": 0}))
+    m = codigo.pivot_table(index="aseguradora", columns="producto", values="v",
+                           aggfunc="min", fill_value=0)
+    fig = px.imshow(m, aspect="auto", color_continuous_scale=[
+        (0.0, "#c62828"), (0.5, "#eceff1"), (1.0, "#2e7d32")],
+        zmin=-1, zmax=1, labels=dict(x="Producto", y="Aseguradora", color="Estado"))
+    fig.update_layout(height=max(360, 28 * len(m) + 160), margin=dict(l=8, r=8, t=30, b=8),
+                      coloraxis_colorbar=dict(
+                          tickvals=[-1, 0, 1],
+                          ticktext=["Solo competencia", "Sin actividad", f"Con {BANCO_PROPIO}"]))
+    st.plotly_chart(fig, width="stretch")
+
+    st.markdown(f"**Oportunidades ordenadas por tamano** -- el cliente ya opera el producto, "
+                f"pero no con {BANCO_PROPIO}")
+    opo = (est[est.estado == "OPORTUNIDAD"]
+           .sort_values("nocional_competencia", ascending=False)
+           [["aseguradora", "producto", "nocional_competencia", "bancos_competidores",
+             "principal_competidor"]])
+    st.dataframe(opo, width="stretch", hide_index=True,
+                 column_config={"nocional_competencia": st.column_config.NumberColumn(
+                     "Nocional competencia (M$)", format="%.0f")})
+    st.download_button("Descargar oportunidades (CSV)",
+                       opo.to_csv(index=False).encode("utf-8"),
+                       "whitespace_oportunidades.csv", "text/csv")
+
+    with st.expander(f"Donde {BANCO_PROPIO} ya esta pero con share bajo"):
+        bajo = (est[(est.estado == f"Con {BANCO_PROPIO}") & (est["share_propio_%"] < 50)]
+                .sort_values("nocional_competencia", ascending=False))
+        st.dataframe(bajo, width="stretch", hide_index=True)
+
+
+def vista_oportunidades(f: dict) -> None:
+    st.subheader("Opportunity Finder")
+    st.caption("Alertas automaticas sobre la cartera. Cada una nombra al cliente, "
+               "el producto, el banco incumbente y el monto en juego.")
+
+    cp = _col_producto()
+    foco = f["periodo_foco"]
+    horizonte = st.slider("Horizonte de vencimientos (meses)", 1, 24, 3, 1)
+    minimo = st.number_input("Monto minimo para levantar alerta (M$)",
+                             0, 10_000_000_000, 1_000_000, 100_000)
+
+    w = predicados_derivado(f, periodos=[foco])
+    base = q(f"""
+        SELECT {nombre_compania_sql()} AS aseguradora, d.rut_compania,
+               d.{cp} AS producto, d.contraparte_grupo AS banco,
+               d.folio_operacion, d.fecha_vencimiento, d.moneda,
+               COALESCE(d.nocional_m,0) AS nocional_m,
+               d.tasa_precio_contrato, d.tasa_precio_mercado,
+               d.rol_tasa_fija, d.par_monedas, d.tasa_pacto,
+               LAST_DAY(STRPTIME(CAST(d.periodo_informacion AS VARCHAR)||'01','%Y%m%d')) AS cierre
+        FROM fact_derivado d {JOIN_COMP} {w}
+    """)
+    if base.empty:
+        st.info("Sin datos para el periodo foco."); return
+
+    alertas: list[dict] = []
+
+    # --- 1. Muro de vencimientos con un competidor -> refinanciamiento -------
+    venc = base[base.fecha_vencimiento.notna()].copy()
+    venc["dias"] = (pd.to_datetime(venc.fecha_vencimiento) -
+                    pd.to_datetime(venc.cierre)).dt.days
+    prox = venc[(venc.dias >= 0) & (venc.dias <= horizonte * 31)]
+    g = (prox.groupby(["aseguradora", "producto", "banco"])
+              .agg(nocional=("nocional_m", "sum"), ops=("folio_operacion", "nunique"),
+                   primero=("fecha_vencimiento", "min"), ultimo=("fecha_vencimiento", "max"))
+              .reset_index())
+    for r in g[(g.nocional >= minimo) & (g.banco != BANCO_PROPIO)].itertuples():
+        alertas.append({
+            "prioridad": r.nocional,
+            "tipo": "Refinanciamiento",
+            "cliente": r.aseguradora, "producto": r.producto, "banco_incumbente": r.banco,
+            "monto_m": r.nocional, "operaciones": r.ops,
+            "detalle": (f"{r.ops} operaciones de {r.producto} por {r.nocional:,.0f} M$ "
+                        f"vencen con {r.banco} entre {r.primero} y {r.ultimo}. "
+                        f"Ventana para ofrecer el refinanciamiento antes del roll."),
+        })
+
+    # --- 2. Whitespace de producto ------------------------------------------
+    mat = matriz_competencia(tuple(f["periodos"]), "")
+    if not mat.empty:
+        piv = mat.pivot_table(index=["aseguradora", "producto"], columns="banco",
+                              values="nocional_m", aggfunc="sum", fill_value=0)
+        if BANCO_PROPIO not in piv.columns:
+            piv[BANCO_PROPIO] = 0.0
+        comp = [c for c in piv.columns if c != BANCO_PROPIO]
+        for idx, fila in piv.iterrows():
+            propio, otros = fila[BANCO_PROPIO], fila[comp].sum()
+            if propio == 0 and otros >= minimo:
+                lider = fila[comp].idxmax()
+                alertas.append({
+                    "prioridad": otros, "tipo": "Whitespace",
+                    "cliente": idx[0], "producto": idx[1], "banco_incumbente": lider,
+                    "monto_m": otros, "operaciones": None,
+                    "detalle": (f"{idx[0]} opera {idx[1]} por {otros:,.0f} M$ con "
+                                f"{int((fila[comp] > 0).sum())} banco(s), liderados por {lider}. "
+                                f"{BANCO_PROPIO} no tiene una sola operacion de este producto "
+                                f"con este cliente."),
+                })
+
+    # --- 3. Concentracion de contraparte -> pitch de diversificacion --------
+    tot = base.groupby("aseguradora").nocional_m.sum()
+    porbanco = base.groupby(["aseguradora", "banco"]).nocional_m.sum().reset_index()
+    porbanco["share"] = porbanco.apply(
+        lambda r: r.nocional_m / tot[r.aseguradora] if tot[r.aseguradora] else 0, axis=1)
+    for r in porbanco[(porbanco.share >= 0.40) & (porbanco.banco != BANCO_PROPIO)
+                      & (porbanco.nocional_m >= minimo)].itertuples():
+        alertas.append({
+            "prioridad": r.nocional_m * r.share, "tipo": "Concentracion",
+            "cliente": r.aseguradora, "producto": "(todos)", "banco_incumbente": r.banco,
+            "monto_m": r.nocional_m, "operaciones": None,
+            "detalle": (f"{r.share:.0%} del libro de derivados de {r.aseguradora} esta "
+                        f"con {r.banco} ({r.nocional_m:,.0f} M$). Argumento de "
+                        f"diversificacion de riesgo de contraparte."),
+        })
+
+    # --- 4. Fondeo via pactos con la competencia ----------------------------
+    pactos = base[(base.producto.astype(str).str.contains("PACTO", na=False))
+                  & (base.banco != BANCO_PROPIO)]
+    if not pactos.empty:
+        gp = (pactos.groupby(["aseguradora", "banco"])
+                    .agg(monto=("nocional_m", "sum"), tasa=("tasa_pacto", "median"),
+                         ops=("folio_operacion", "nunique")).reset_index())
+        for r in gp[gp.monto >= minimo].itertuples():
+            tasa = f"{r.tasa:.2f}%" if pd.notna(r.tasa) else "sin tasa informada"
+            alertas.append({
+                "prioridad": r.monto, "tipo": "Fondeo",
+                "cliente": r.aseguradora, "producto": "PACTO", "banco_incumbente": r.banco,
+                "monto_m": r.monto, "operaciones": r.ops,
+                "detalle": (f"{r.aseguradora} se fondea con {r.banco} via pactos por "
+                            f"{r.monto:,.0f} M$ a una tasa mediana de {tasa}. "
+                            f"Comparar contra nuestra curva de fondeo."),
+            })
+
+    # --- 5. Gap de precio contra la mediana del mercado ---------------------
+    px_ = base[base.tasa_precio_contrato.notna()]
+    if not px_.empty:
+        med = px_.groupby("producto").tasa_precio_contrato.median()
+        gp = (px_.groupby(["aseguradora", "producto", "banco"])
+                 .agg(tasa=("tasa_precio_contrato", "median"),
+                      monto=("nocional_m", "sum")).reset_index())
+        gp["mediana_mercado"] = gp["producto"].map(med)
+        gp["gap"] = gp.tasa - gp.mediana_mercado
+        for r in gp[(gp.monto >= minimo) & (gp.banco != BANCO_PROPIO)
+                    & (gp.gap.abs() > 0.25)].itertuples():
+            alertas.append({
+                "prioridad": r.monto * abs(r.gap), "tipo": "Precio",
+                "cliente": r.aseguradora, "producto": r.producto,
+                "banco_incumbente": r.banco, "monto_m": r.monto, "operaciones": None,
+                "detalle": (f"{r.aseguradora} paga {r.tasa:.3f} en {r.producto} con "
+                            f"{r.banco}, contra una mediana de mercado de "
+                            f"{r.mediana_mercado:.3f} ({r.gap:+.3f}). "
+                            f"Espacio para mejorar el precio."),
+            })
+
+    if not alertas:
+        st.success("Sin alertas sobre el umbral elegido. Baja el monto minimo para ver mas.")
+        return
+
+    al = pd.DataFrame(alertas).sort_values("prioridad", ascending=False)
+    tipos = st.multiselect("Tipo de alerta", sorted(al.tipo.unique()),
+                           default=sorted(al.tipo.unique()))
+    al = al[al.tipo.isin(tipos)]
+
+    c = st.columns(len(tipos) + 1 if tipos else 1)
+    c[0].metric("Alertas", f"{len(al):,}")
+    for i, t in enumerate(tipos, start=1):
+        if i < len(c):
+            c[i].metric(t, f"{(al.tipo == t).sum():,}")
+
+    st.markdown("**Top 15**")
+    for r in al.head(15).itertuples():
+        color = {"Refinanciamiento": "🔴", "Whitespace": "🟠", "Concentracion": "🟡",
+                 "Fondeo": "🔵", "Precio": "🟣"}.get(r.tipo, "⚪")
+        with st.container(border=True):
+            st.markdown(f"{color} **{r.tipo} · {r.cliente} · {r.producto}** "
+                        f"— incumbente **{r.banco_incumbente}** — **{r.monto_m:,.0f} M$**")
+            st.caption(r.detalle)
+
+    st.markdown("**Todas las alertas**")
+    st.dataframe(al.drop(columns=["prioridad"]), width="stretch", hide_index=True,
+                 column_config={"monto_m": st.column_config.NumberColumn(
+                     "Monto (M$)", format="%.0f")})
+    st.download_button("Descargar alertas (CSV)", al.to_csv(index=False).encode("utf-8"),
+                       f"oportunidades_{foco}.csv", "text/csv")
+
+    # --- segmentacion -------------------------------------------------------
+    st.divider()
+    st.markdown("**Segmentacion de clientes**")
+    st.caption("Reglas explicitas sobre tres ejes, no un modelo opaco: en una mesa "
+               "hay que poder defender por que un cliente cayo en un segmento.")
+    seg = (base.groupby("aseguradora")
+               .agg(nocional=("nocional_m", "sum"),
+                    productos=("producto", "nunique"),
+                    bancos=("banco", "nunique"),
+                    operaciones=("folio_operacion", "nunique")).reset_index())
+    if len(seg) >= 3:
+        seg["tamano"] = pd.qcut(seg.nocional.rank(method="first"), 3,
+                                labels=["Chico", "Mediano", "Grande"])
+    else:
+        seg["tamano"] = "Unico"
+    seg["sofisticacion"] = seg.productos.map(lambda n: "Simple" if n <= 1 else
+                                             ("Media" if n <= 3 else "Sofisticada"))
+    seg["apertura"] = seg.bancos.map(lambda n: "Cautivo" if n <= 2 else
+                                     ("Selectivo" if n <= 5 else "Multibanco"))
+    propio = (base[base.banco == BANCO_PROPIO].groupby("aseguradora").nocional_m.sum())
+    seg["share_propio_%"] = (100 * seg.aseguradora.map(propio).fillna(0)
+                             / seg.nocional.replace(0, pd.NA)).round(1).fillna(0)
+    seg["segmento"] = seg.tamano.astype(str) + " / " + seg.sofisticacion + " / " + seg.apertura
+    st.dataframe(seg.sort_values("nocional", ascending=False), width="stretch",
+                 hide_index=True,
+                 column_config={"nocional": st.column_config.NumberColumn(
+                     "Nocional (M$)", format="%.0f")})
+    st.plotly_chart(
+        px.scatter(seg, x="bancos", y="nocional", size="operaciones", color="sofisticacion",
+                   hover_name="aseguradora", log_y=True,
+                   hover_data=["productos", "share_propio_%", "segmento"],
+                   labels={"bancos": "Bancos con los que opera",
+                           "nocional": "Nocional total (M$, log)"})
+          .update_layout(height=430, margin=dict(t=30)),
+        width="stretch")
+
+
 def vista_explorador(f: dict) -> None:
     st.subheader("Explorador libre")
-    st.caption("La sabana completa, con los filtros del sidebar aplicados. "
-               "Todas las columnas del warehouse, crudas y calculadas.")
-    fuente = st.selectbox("Tabla", ["Derivados", "Renta fija", "Garantias",
-                                    "Flujos", "Cuarentena"])
-    limite = st.number_input("Maximo de filas a traer", 1_000, 1_000_000, 50_000, 1_000,
-                             help="La sabana completa son millones de filas; el tope evita "
-                                  "que el navegador se caiga. La exportacion respeta este tope.")
+    st.caption("La sabana completa con los filtros del sidebar aplicados, mas busqueda "
+               "por texto y por anio. Todas las columnas del warehouse, crudas y calculadas.")
 
-    if fuente == "Derivados":
-        w = predicados_derivado(f)
-        sql = f"""SELECT d.*, {nombre_compania_sql()} AS aseguradora_nombre,
-                    COALESCE(d.mtm_activo_m,0)-COALESCE(d.mtm_pasivo_m,0) AS mtm_neto_m,
-                    DATE_DIFF('day',
-                      LAST_DAY(STRPTIME(CAST(d.periodo_informacion AS VARCHAR)||'01','%Y%m%d')),
-                      d.fecha_vencimiento) AS plazo_dias,
-                    d.tasa_precio_contrato - d.tasa_precio_mercado AS spread_vs_mercado
-                  FROM fact_derivado d {JOIN_COMP} {w} LIMIT {limite}"""
-    elif fuente == "Renta fija":
-        w = predicados_rf(f)
-        sql = f"""SELECT d.*, {nombre_compania_sql()} AS aseguradora_nombre,
-                    DATE_DIFF('day',
-                      LAST_DAY(STRPTIME(CAST(d.periodo_informacion AS VARCHAR)||'01','%Y%m%d')),
-                      d.fecha_vencimiento) AS plazo_dias,
-                    CASE WHEN d.valor_nominal > 0
-                         THEN d.valor_nominal_vigente / d.valor_nominal END AS razon_vigente_nominal
-                  FROM fact_renta_fija d {JOIN_COMP} {w} LIMIT {limite}"""
-    elif fuente == "Garantias":
-        w = predicados_garantia(f)
-        sql = f"""SELECT d.*, {nombre_compania_sql()} AS aseguradora_nombre
-                  FROM fact_garantia d {JOIN_COMP} {w} LIMIT {limite}"""
-    elif fuente == "Flujos":
-        if not existe("fact_flujo"):
-            st.warning("Corre `python -m analytics.flows --todos` primero."); return
-        pers = ", ".join(str(p) for p in f["periodos"]) or "0"
-        sql = f"SELECT * FROM fact_flujo WHERE periodo IN ({pers}) LIMIT {limite}"
+    TABLAS = {
+        "Derivados": "fact_derivado", "Renta fija": "fact_renta_fija",
+        "Equity y fondos de inversion": "fact_equity", "Fondos mutuos": "fact_fondo",
+        "Garantias": "fact_garantia", "Flujos": "fact_flujo",
+        "Cuarentena": "fact_cuarentena",
+    }
+    c1, c2, c3 = st.columns([2, 2, 1])
+    fuente = c1.selectbox("Tabla", [k for k, v in TABLAS.items() if existe(v)])
+    tabla = TABLAS[fuente]
+    cols_tabla = columnas(tabla)
+
+    anios = sorted({int(str(p)[:4]) for p in f["periodos"]})
+    sel_anios = c2.multiselect("Anio", anios, default=anios)
+    limite = c3.number_input("Max filas", 1_000, 2_000_000, 50_000, 1_000)
+
+    texto = st.text_input("Busqueda libre",
+                          placeholder="nemotecnico, folio, contraparte, custodio, moneda...",
+                          help="Busca el texto en todas las columnas de texto de la tabla, "
+                               "sin distinguir mayusculas.")
+
+    col_per = "periodo" if tabla == "fact_flujo" else "periodo_informacion"
+    pers = [p for p in f["periodos"] if int(str(p)[:4]) in sel_anios] or f["periodos"]
+    partes = [f"d.{col_per} IN ({', '.join(str(p) for p in pers)})" if pers else "1=0"]
+
+    # Los filtros del sidebar que apliquen a esta tabla.
+    if tabla == "fact_derivado":
+        extra = predicados_derivado(f, periodos=pers)
+    elif tabla == "fact_renta_fija":
+        extra = predicados_rf(f)
+    elif tabla == "fact_garantia":
+        extra = predicados_garantia(f)
     else:
-        pers = ", ".join(str(p) for p in f["periodos"]) or "0"
-        sql = (f"SELECT * FROM fact_cuarentena WHERE periodo_informacion IN ({pers}) "
-               f"LIMIT {limite}")
+        extra = where(partes)
+    if tabla in ("fact_equity", "fact_fondo"):
+        extra = where(partes + [cl_in(tabla, "rut_compania", f.get("companias"),
+                                      f.get("_companias_all"))])
 
+    if texto.strip():
+        txt = texto.strip().replace("'", "''")
+        # Se castea a VARCHAR y se compara en minusculas: asi la busqueda tambien
+        # matchea un folio o un RUT, que estan guardados como numero.
+        ors = " OR ".join(f"lower(CAST(d.{c} AS VARCHAR)) LIKE '%{txt.lower()}%'"
+                          for c in sorted(cols_tabla))
+        extra = (extra + (" AND " if extra else " WHERE ") + f"({ors})")
+
+    calc = ""
+    if tabla == "fact_derivado":
+        calc = f""", {nombre_compania_sql()} AS aseguradora_nombre,
+            COALESCE(d.mtm_contrato_m, COALESCE(d.mtm_activo_m,0)-COALESCE(d.mtm_pasivo_m,0)) AS mtm_neto_m,
+            DATE_DIFF('day', LAST_DAY(STRPTIME(CAST(d.periodo_informacion AS VARCHAR)||'01','%Y%m%d')),
+                      d.fecha_vencimiento) AS plazo_dias,
+            d.tasa_precio_contrato - d.tasa_precio_mercado AS spread_vs_mercado"""
+        join = JOIN_COMP
+    elif tabla == "fact_renta_fija":
+        calc = f""", {nombre_compania_sql()} AS aseguradora_nombre,
+            DATE_DIFF('day', LAST_DAY(STRPTIME(CAST(d.periodo_informacion AS VARCHAR)||'01','%Y%m%d')),
+                      d.fecha_vencimiento) AS plazo_dias,
+            CASE WHEN d.valor_nominal > 0 THEN d.valor_nominal_vigente / d.valor_nominal END
+                AS razon_vigente_nominal,
+            d.tir_mercado - d.tir_compra AS delta_tir"""
+        join = JOIN_COMP
+    elif tabla in ("fact_equity", "fact_fondo", "fact_garantia"):
+        calc = f", {nombre_compania_sql()} AS aseguradora_nombre"
+        join = JOIN_COMP
+    else:
+        join = ""
+
+    sql = f"SELECT d.*{calc} FROM {tabla} d {join} {extra} LIMIT {limite}"
     df = q(sql)
-    st.caption(f"{len(df):,} filas x {len(df.columns)} columnas")
+    st.caption(f"{len(df):,} filas x {len(df.columns)} columnas"
+               + (f"  ·  tope de {limite:,} alcanzado" if len(df) >= limite else ""))
     if df.empty:
-        st.info("Sin filas para los filtros elegidos."); return
+        st.info("Sin filas para esos filtros."); return
 
-    cols = st.multiselect("Columnas", list(df.columns), default=list(df.columns))
+    with st.expander("Elegir columnas", expanded=False):
+        pre = st.radio("Preajuste", ["Todas", "Comerciales", "Numericas"], horizontal=True)
+        if pre == "Comerciales":
+            pref = [c for c in df.columns if any(k in c for k in (
+                "aseguradora", "contraparte", "producto", "subtipo", "nemotecnico", "folio",
+                "moneda", "nocional", "mtm", "tasa", "tir", "fecha", "plazo", "clasificacion",
+                "valor_final", "duracion", "rol_tasa"))]
+        elif pre == "Numericas":
+            pref = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
+        else:
+            pref = list(df.columns)
+        cols = st.multiselect("Columnas", list(df.columns), default=pref or list(df.columns))
+
     vista = df[cols] if cols else df
+    orden = st.selectbox("Ordenar por", ["(sin orden)"] + list(vista.columns))
+    if orden != "(sin orden)":
+        asc = st.checkbox("Ascendente", value=False)
+        vista = vista.sort_values(orden, ascending=asc, na_position="last")
+
     st.dataframe(vista, width="stretch", hide_index=True, height=560)
     st.download_button("Descargar CSV", vista.to_csv(index=False).encode("utf-8"),
-                       f"cmf1835_{fuente.lower().replace(' ', '_')}.csv", "text/csv")
+                       f"cmf1835_{tabla}.csv", "text/csv")
     with st.expander("SQL ejecutado"):
         st.code(sql, language="sql")
 
@@ -807,6 +1223,10 @@ def anterior(periodo: int) -> int:
 def main() -> None:
     conectar()
     st.title("Mesa de Dinero -- Carteras de aseguradoras (Circular 1835 CMF)")
+    if DB == DB_SAMPLE:
+        st.info("Leyendo la **muestra** de despliegue (ultimos meses). "
+                "Para la serie completa, genera el warehouse local con "
+                "`python -m warehouse.loader --data <carpeta de ZIP>`.")
 
     f = construir_sidebar()
     if not f["periodos"]:
@@ -827,15 +1247,17 @@ def main() -> None:
     k[4].metric("Grupos contraparte", f"{int(kpi.grupos[0] or 0):,}")
     k[5].metric("Aseguradoras", f"{int(kpi.cias[0] or 0):,}")
 
-    t1, t2, t3, t4, t5, t6 = st.tabs([
-        "1. Whitespace Map", "2. Roll-Off Calendar", "3. Price Discovery",
-        "4. Flujos mensuales", "5. Garantias", "6. Explorador libre"])
-    with t1: vista_whitespace(f)
-    with t2: vista_rolloff(f)
-    with t3: vista_price_discovery(f)
-    with t4: vista_flujos(f)
-    with t5: vista_garantias(f)
-    with t6: vista_explorador(f)
+    tabs = st.tabs([
+        "Oportunidades", "Whitespace 2.0", "Whitespace Map", "Roll-Off Calendar",
+        "Price Discovery", "Flujos mensuales", "Garantias", "Explorador libre"])
+    with tabs[0]: vista_oportunidades(f)
+    with tabs[1]: vista_whitespace2(f)
+    with tabs[2]: vista_whitespace(f)
+    with tabs[3]: vista_rolloff(f)
+    with tabs[4]: vista_price_discovery(f)
+    with tabs[5]: vista_flujos(f)
+    with tabs[6]: vista_garantias(f)
+    with tabs[7]: vista_explorador(f)
 
 
 if __name__ == "__main__":

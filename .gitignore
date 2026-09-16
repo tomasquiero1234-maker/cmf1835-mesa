@@ -1,6 +1,63 @@
+# ---------------------------------------------------------------------------
+#  Entorno
+# ---------------------------------------------------------------------------
 .venv/
+venv/
+env/
 __pycache__/
-*.pyc
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# ---------------------------------------------------------------------------
+#  Sistema operativo y editores
+# ---------------------------------------------------------------------------
 .DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# ---------------------------------------------------------------------------
+#  Respaldos del propio trabajo
+# ---------------------------------------------------------------------------
 *.bak
+*.orig
+*.rej
+
+# ---------------------------------------------------------------------------
+#  Warehouse completo: 124 MB de dato DERIVADO
+#  Se regenera con `python -m warehouse.loader --data <carpeta de ZIP>`, asi
+#  que no tiene por que vivir en git ni clonarse en cada despliegue. Lo que
+#  si se versiona es la muestra de warehouse/sample/, que es el artefacto
+#  portable que consume la nube.
+# ---------------------------------------------------------------------------
 warehouse/data/
+*.duckdb.wal
+!warehouse/sample/
+!warehouse/sample/*.duckdb
+
+# ---------------------------------------------------------------------------
+#  Datos de origen: los ZIP de la CMF son publicos pero pesan ~450 MB
+# ---------------------------------------------------------------------------
+*.zip
+Archivos completos ZIP CMF/
+*.TXT
+
+# ---------------------------------------------------------------------------
+#  Salidas de corridas y exportaciones
+# ---------------------------------------------------------------------------
+*.log
+/out/
+/exports/
+*.csv
+!config/**/*.csv
+
+# ---------------------------------------------------------------------------
+#  Secretos. Nunca.
+# ---------------------------------------------------------------------------
+.streamlit/secrets.toml
+.env
+*.pem
+*.key

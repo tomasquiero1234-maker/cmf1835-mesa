@@ -188,6 +188,118 @@ def _first(f: Mapping[str, Any], nombres: Iterable[str]) -> tuple[float | None, 
     return None, None
 
 
+#: Familias de tasa flotante que aparecen en la pata de un swap. Todo lo que
+#: no es FIJA se considera flotante para decidir quien paga fijo.
+_FLOTANTES = ("ICP", "LIBOR", "SOFR", "TAB", "VAR", "CAMARA", "TPM", "EURIBOR")
+
+
+def _es_fija(etiqueta: str | None) -> bool | None:
+    if not etiqueta:
+        return None
+    e = etiqueta.upper()
+    if "FIJA" in e or "FIJO" in e:
+        return True
+    return False if any(k in e for k in _FLOTANTES) else None
+
+
+#: Codificacion oficial de TIPO_CONTRATO en B.7 (anexo, pagina 137):
+#: el subyacente sobre el que esta hecho el contrato.
+SUBYACENTE = {"1": "TASA_O_INFLACION", "2": "MONEDA_EXTRANJERA", "3": "ACCIONES_O_INDICES"}
+
+
+def _clasificar_swap(tipo_contrato: str | None,
+                     moneda_larga: str | None, moneda_corta: str | None,
+                     fija_larga: bool | None, fija_corta: bool | None) -> tuple[str, str]:
+    """Separa IRS de CCS y dice quien paga fijo.
+
+    La separacion sale de TIPO_CONTRATO, que es la codificacion oficial del
+    anexo: 01 es tasa o inflacion, 02 es moneda extranjera. NO se deduce de
+    las etiquetas de moneda de cada pata, y vale la pena explicar por que,
+    porque es la trampa obvia:
+
+    El 91% de los swaps informa MONEDA_POSICION_CORTA = 'PROM', que no es una
+    moneda sino una convencion de precio. En esos registros el nocional largo
+    dividido por T.C._FUTURO_CONTRATO da un numero redondo exacto (933.420 /
+    933,42 = 1.000), o sea que la pata corta esta expresada contra un tipo de
+    cambio, no contra una moneda declarada. Clasificar por el texto de la
+    moneda acierta de casualidad en este caso y falla en cuanto un informante
+    escriba otra cosa.
+
+    Que la mayoria sean CCS no es raro: las aseguradoras chilenas calzan en UF
+    y compran bonos en moneda extranjera, asi que el cross currency es su
+    cobertura natural. Por la misma razon abundan los fijo-contra-fijo.
+    """
+    cod = str(tipo_contrato).strip().lstrip("0") if tipo_contrato is not None else ""
+    if cod == "1":
+        subtipo = "IRS"
+    elif cod == "2":
+        subtipo = "CCS"
+    else:
+        # Sin codificacion utilizable se cae a las monedas, y si tampoco
+        # alcanzan se dice que no se sabe en vez de inventar un subtipo.
+        ml = (moneda_larga or "").strip().upper()
+        mc = (moneda_corta or "").strip().upper()
+        if ml and mc and ml in _UNIDADES and mc in _UNIDADES:
+            subtipo = "IRS" if ml == mc else "CCS"
+        else:
+            subtipo = "SWAP_SIN_CLASIFICAR"
+
+    if fija_larga is True and fija_corta is False:
+        rol = "RECIBE_FIJA"
+    elif fija_larga is False and fija_corta is True:
+        rol = "PAGA_FIJA"
+    elif fija_larga is True and fija_corta is True:
+        rol = "FIJA_CONTRA_FIJA"
+    elif fija_larga is False and fija_corta is False:
+        rol = "FLOTANTE_CONTRA_FLOTANTE"
+    else:
+        rol = "SIN_DETERMINAR"
+    return subtipo, rol
+
+
+#: Unidades de denominacion reconocibles. 'PROM' no esta a proposito: es una
+#: convencion de precio, no una moneda.
+_UNIDADES = {"UF", "$$", "CLP", "USD", "EUR", "GBP", "JPY", "CHF", "AUD", "CAD",
+             "UVR", "UDI", "BRL", "MXN", "PEN", "COP", "NOK", "SEK", "DKK"}
+
+
+def _duracion(plazo_meses: float | None, tir: float | None,
+              cupon: float | None, dias_reales: float | None = None) -> float | None:
+    """Duracion modificada APROXIMADA de un bono bullet, en anios.
+
+    OJO CON LA ESCALA: PLAZO_AL_VENCIMIENTO del anexo viene en MESES, no en
+    dias. La mediana informada es 200 contra 6.084 dias reales hasta el
+    vencimiento -- un factor de 30,4. Dividirlo por 365 da duraciones de medio
+    anio para una cartera de aseguradora de vida, que es absurdo.
+
+    Se prefiere el plazo calculado desde la fecha de vencimiento cuando esta,
+    porque no depende de la unidad que use el informante.
+
+    El anexo no trae el calendario de cupones -- vive en B.10, sin transcribir --
+    asi que esto es la formula cerrada de un bullet con cupon anual. Para un
+    papel amortizable la duracion real es MENOR. Sirve para ordenar y comparar,
+    no para calcular un hedge, y por eso la columna se llama `_aprox`.
+    """
+    if dias_reales and dias_reales > 0:
+        n = dias_reales / 365.0
+    elif plazo_meses and plazo_meses > 0:
+        n = plazo_meses / 12.0
+    else:
+        return None
+    y = (tir or cupon or 0) / 100.0
+    if y <= -0.99:
+        return None
+    c = (cupon or 0) / 100.0
+    if c <= 0 or abs(y) < 1e-9:
+        return round(n / (1 + y), 4)
+    try:
+        mac = ((1 + y) / y) - ((1 + y + n * (c - y)) / (c * ((1 + y) ** n - 1) + y))
+        d = mac / (1 + y)
+    except (ZeroDivisionError, OverflowError, ValueError):
+        return None
+    return round(d, 4) if 0 < d < 100 else None
+
+
 def _fin_de_mes(periodo: int) -> _dt.date:
     a, m = divmod(int(periodo), 100)
     return (_dt.date(a + (m == 12), (m % 12) + 1, 1) - _dt.timedelta(days=1))
@@ -249,9 +361,58 @@ class RowBuilder:
         tasa_m, _, _ = _first_tasa(f, _TASA_MERCADO.get(rec.record_type, ()))
         largo, _ = _first(f, ("NOCIONAL_POSICION_LARGA(monto)", "ACTIVO_OBJETO_POSICION_LARGA(monto)"))
         corto, _ = _first(f, ("NOCIONAL_POSICION_CORTA(monto)", "ACTIVO_OBJETO_POSICION_CORTA(monto)"))
+        ml = _txt(f.get("MONEDA_POSICION_LARGA"))
+        mc = _txt(f.get("MONEDA_POSICION_CORTA"))
+        _, tipo_larga, _ = _first_tasa(f, ("TASA_A_FUTURO_CONTRATO_POSICION_LARGA",))
+        _, tipo_corta, _ = _first_tasa(f, ("TASA_A_FUTURO_CONTRATO_POSICION_CORTA",))
+        tasa_larga, _, _ = _first_tasa(f, ("TASA_A_FUTURO_CONTRATO_POSICION_LARGA",))
+        tasa_corta, _, _ = _first_tasa(f, ("TASA_A_FUTURO_CONTRATO_POSICION_CORTA",))
+        fija_larga, fija_corta = _es_fija(tipo_larga), _es_fija(tipo_corta)
+        producto = PRODUCTO.get(rec.record_type, rec.record_type)
+        if rec.record_type == "5":
+            subtipo, rol_fija = _clasificar_swap(
+                f.get("TIPO_CONTRATO"), ml, mc, fija_larga, fija_corta)
+        else:
+            subtipo, rol_fija = producto, None
+
+        # MTM exacto del contrato: el anexo lo trae con signo en un campo
+        # propio. Reconstruirlo como activo menos pasivo es una aproximacion;
+        # este es el numero que la compania declara.
+        mtm_contrato = _num(f.get("VALOR_RAZONABLE_DEL_CONTRATO_A_LA_FECHA_DE_LA_INFORMACION_(M$)")
+                            or f.get("VALOR_RAZONABLE_DEL_CONTRATO_A_LA_FECHA_DE_LA_INFORMACION"))
+
         row = self._base(rec, zip_origen, descargado)
         row.update({
-            "producto": PRODUCTO.get(rec.record_type, rec.record_type),
+            "producto": producto,
+            "subtipo": subtipo,
+            "subyacente_contrato": SUBYACENTE.get(
+                str(f.get("TIPO_CONTRATO")).strip().lstrip("0"), None),
+            "rol_tasa_fija": rol_fija,
+            "moneda_larga": ml,
+            "moneda_corta_swap": mc,
+            "par_monedas": (f"{ml}/{mc}" if ml and mc and ml != mc else None),
+            "pata_larga_tipo": tipo_larga,
+            "pata_corta_tipo": tipo_corta,
+            "pata_larga_tasa": tasa_larga,
+            "pata_corta_tasa": tasa_corta,
+            "spread_patas_pb": (round((tasa_larga - tasa_corta) * 100, 2)
+                                if tasa_larga is not None and tasa_corta is not None else None),
+            "mtm_contrato_m": mtm_contrato,
+            "valor_presente_largo_m": _num(f.get("VALOR_PRESENTE_")),
+            "valor_presente_corto_m": _num(f.get("VALOR_PRESENTE_POSICION_CORTA(M$)")),
+            "tipo_cambio_contrato": _num(f.get("T.C._FUTURO_CONTRATO")),
+            "tipo_cambio_mercado": _num(f.get("TIPO_DE_CAMBIO_MERCADO")),
+            "efecto_resultados_m": _num(f.get("EFECTO_EN_RESULTADOS_REALIZADOS")),
+            "anexo_garantia": _txt(f.get("ANEXO_GARANTIA")),
+            "identificador_garantia": _txt(f.get("IDENTIFICADOR_GARANTIA")),
+            "origen_informacion": _txt(f.get("ORIGEN_DE_LA_INFORMACION")),
+            "nombre_cartera": _txt(f.get("NOMBRE_CARTERA")),
+            # --- pactos: la linea de financiamiento --------------------------
+            "tasa_pacto": _num(f.get("TASA_PACTO")),
+            "tir_pacto_compra": _num(f.get("TIR_COMPRA")),
+            "activo_subyacente": _txt(f.get("ACTIVO_OBJETO(nombre)")),
+            "serie_subyacente": _txt(f.get("SERIE_ACTIVO_OBJETO")),
+            "monto_subyacente_m": _num(f.get("ACTIVO_OBJETO(monto)(M$)")),
             "record_type": rec.record_type,
             "folio_operacion": _txt(f.get("FOLIO_OPERACION")),
             "item_operacion": _txt(f.get("ITEM_OPERACION")),
@@ -316,7 +477,7 @@ class RowBuilder:
             "clasificacion_riesgo": _txt(f.get("CLASIFICACION_DE_RIESGO")),
             "clasificacion_inversion": _txt(f.get("CLASIFICACION_INVERSION")),
             "incremento_riesgo": _txt(f.get("INCREMENTO_RIESGO")),
-            "plazo_al_vencimiento": _num(f.get("PLAZO_AL_VENCIMIENTO")),
+            "plazo_meses": _num(f.get("PLAZO_AL_VENCIMIENTO")),
             "tasa_base": _num(f.get("TASA_BASE")),
             "spread_emision": _num(f.get("SPREAD_A_LA_EMISION")),
             "tir_compra": _num(f.get("TIR_COMPRA")),
@@ -324,8 +485,88 @@ class RowBuilder:
             "tir_sin_costo": _num(f.get("TIR_SIN_COSTO")),
             "tasa_pacto": _num(f.get("TASA_PACTO")),
             "fuente_precios": _txt(f.get("FUENTE_PRECIOS")),
+            "valor_par": _num(f.get("VALOR_PAR")),
+            "porcentaje_valor_par": _num(f.get("PORCENTAJE_VALOR_PAR")),
+            "duracion_modificada_aprox": _duracion(
+                _num(f.get("PLAZO_AL_VENCIMIENTO")),
+                _num(f.get("TIR_MERCADO")) or _num(f.get("TIR_COMPRA")),
+                _num(f.get("TASA_EMISION")),
+                dias_reales=((f["FECHA_VENCIMIENTO"] - _fin_de_mes(rec.periodo)).days
+                             if f.get("FECHA_VENCIMIENTO") and rec.periodo else None)),
             "prohibicion": _txt(f.get("PROHIBICION")),
             "custodia": _txt(f.get("CUSTODIA_INV")),
+            "veredicto": veredicto.verdict.value,
+        })
+        return row
+
+    def equity(self, rec: ParsedRecord, zip_origen: str, descargado: str,
+               veredicto: Any) -> dict[str, Any]:
+        """Renta variable y cuotas de fondos de inversion (B.2).
+
+        Aqui esta la exposicion a equity y el AUM declarado de las filiales:
+        participacion porcentual, patrimonio y resultado de la sociedad.
+        """
+        f = rec.fields
+        row = self._base(rec, zip_origen, descargado)
+        row.update({
+            "tipo_instrumento": _txt(f.get("TIPO_INSTRUMENTO")),
+            "nemotecnico": _txt(f.get("NEMOTECNICO")),
+            "serie": _txt(f.get("SERIE")),
+            "emisor_rut": _num(f.get("RUT")),
+            "emisor_dv": _txt(f.get("VERIFICADOR")),
+            "rut_fondo": _num(f.get("RUT_FONDO_P")),
+            "nombre_fondo": _txt(f.get("NOMBRE_FONDO_P") or f.get("NOMBRE_DEL_FONDO")),
+            "unidades": _num(f.get("UNIDADES")),
+            "presencia_bursatil": _num(f.get("PRES_BURSATIL")),
+            "unidad_monetaria": _txt(f.get("UNIDAD_MONETARIA")),
+            "valor_costo": _num(f.get("VALOR_COSTO")),
+            "valor_libro": _num(f.get("VALOR_LIBRO")),
+            "valor_bolsa": _num(f.get("VALOR_BOLSA")),
+            "valor_razonable": _num(f.get("VALOR_RAZONABLE")),
+            "deterioro": _num(f.get("DETERIORO")),
+            "valor_final": _num(f.get("VALOR_FINAL")),
+            "participacion_pct": _num(f.get("PARTICIPACION_PORCENTUAL")
+                                      or f.get("PORCENTAJE_PARTICIPACION")),
+            "patrimonio_filial": _num(f.get("PATRIMONIO_FILIAL")),
+            "resultado_filial": _num(f.get("RESULTADO_DE_LA_SOCIEDAD_FILIAL")),
+            "cuotas_suscritas": _num(f.get("CUOTAS_SUSCRITAS")),
+            "clasificacion_riesgo": _txt(f.get("CLASIFICACION_DE_RIESGO")),
+            "filial_coligada": _txt(f.get("FILIAL_COLIGADA")),
+            "tipo_fondo": _txt(f.get("TIPO_FONDO_ACC")),
+            "segmento_fondo": _txt(f.get("SEGMENTO_FONDO")),
+            "subyacente": _txt(f.get("SUBYACENTE")),
+            "relacionado": _txt(f.get("RELACIONADO")),
+            "custodio": _txt(f.get("NOMBRE_CUSTODIO")),
+            "nombre_cartera": _txt(f.get("NOMBRE_CARTERA")),
+            "clasif_valoriz_eeff": _txt(f.get("METOD_CLASIF_VALORIZ_EEFF")),
+            "veredicto": veredicto.verdict.value,
+        })
+        return row
+
+    def fondo(self, rec: ParsedRecord, zip_origen: str, descargado: str,
+              veredicto: Any) -> dict[str, Any]:
+        """Cuotas de fondos mutuos (B.3)."""
+        f = rec.fields
+        row = self._base(rec, zip_origen, descargado)
+        row.update({
+            "tipo_instrumento": _txt(f.get("TIPO_INSTRUMENTO")),
+            "nemotecnico": _txt(f.get("NEMOTECNICO")),
+            "tipo_fondo": _txt(f.get("TIPO_FONDO")),
+            "serie": _txt(f.get("SERIE")),
+            "rut_administradora": _num(f.get("RUT_ADMINISTRADORA")),
+            "unidades": _num(f.get("UNIDADES")),
+            "unidad_monetaria": _txt(f.get("UNIDAD_MONETARIA")),
+            "valor_cuota": _num(f.get("VALOR_CUOTA")),
+            "valor_inversion": _num(f.get("VALOR_DE_INVERSION")),
+            "valor_razonable": _num(f.get("VALOR_RAZONABLE")),
+            "deterioro": _num(f.get("DETERIORO")),
+            "valor_final": _num(f.get("VALOR_FINAL")),
+            "clasificacion_riesgo": _txt(f.get("CLASIFICACION_DE_RIESGO")),
+            "relacionado": _txt(f.get("RELACIONADO")),
+            "nombre_fondo": _txt(f.get("NOMBRE_DEL_FONDO")),
+            "nombre_cartera": _txt(f.get("NOMBRE_CARTERA")),
+            "custodio": _txt(f.get("NOMBRE_CUSTODIO")),
+            "clasif_valoriz_eeff": _txt(f.get("METOD_CLASIF_VALORIZ_EEFF")),
             "veredicto": veredicto.verdict.value,
         })
         return row
@@ -384,7 +625,7 @@ class Loader:
     """Recorre los ZIP y escribe Parquet particionado por periodo."""
 
     HECHOS = ("fact_derivado", "fact_renta_fija", "fact_garantia", "fact_cuarentena",
-              "dim_compania_src")
+              "fact_equity", "fact_fondo", "dim_compania_src")
 
     def __init__(self, out: Path, *, layouts: Path = LAYOUTS, entities: Path = ENTITIES) -> None:
         self.out = out
@@ -409,7 +650,7 @@ class Loader:
                     spec, _rut, _per = self.engine.describe(base)
                 except UnknownFileTypeError:
                     continue
-                if spec.letter not in ("I", "P", "G"):
+                if spec.letter not in ("I", "P", "G", "A", "F"):
                     continue
                 for rec in self.engine.parse_file(base, data=z.read(info)):
                     # La generacion vieja (pre 202412) tiene otro largo de
@@ -446,6 +687,14 @@ class Loader:
             if v.verdict is Verdict.QUARANTINE:
                 return "fact_cuarentena", self.build.cuarentena(rec, zip_origen, descargado, v)
             return "fact_renta_fija", self.build.renta_fija(rec, zip_origen, descargado, v)
+        if L == "A" and t == "2":
+            v = self.validator.validate(L, t, rec.fields,
+                                        untrusted=rec.untrusted, periodo=rec.periodo)
+            return "fact_equity", self.build.equity(rec, zip_origen, descargado, v)
+        if L == "F" and t == "2":
+            v = self.validator.validate(L, t, rec.fields,
+                                        untrusted=rec.untrusted, periodo=rec.periodo)
+            return "fact_fondo", self.build.fondo(rec, zip_origen, descargado, v)
         if L == "G" and t == "2":
             v = self.validator.validate(L, t, rec.fields,
                                         untrusted=rec.untrusted, periodo=rec.periodo)
@@ -497,6 +746,8 @@ DDL = """
 CREATE OR REPLACE VIEW raw_derivado   AS SELECT * FROM read_parquet('{root}/fact_derivado/*/*.parquet',   union_by_name=true, hive_partitioning=true);
 CREATE OR REPLACE VIEW raw_renta_fija AS SELECT * FROM read_parquet('{root}/fact_renta_fija/*/*.parquet', union_by_name=true, hive_partitioning=true);
 CREATE OR REPLACE VIEW raw_garantia   AS SELECT * FROM read_parquet('{root}/fact_garantia/*/*.parquet',   union_by_name=true, hive_partitioning=true);
+CREATE OR REPLACE VIEW raw_equity     AS SELECT * FROM read_parquet('{root}/fact_equity/*/*.parquet',     union_by_name=true, hive_partitioning=true);
+CREATE OR REPLACE VIEW raw_fondo      AS SELECT * FROM read_parquet('{root}/fact_fondo/*/*.parquet',      union_by_name=true, hive_partitioning=true);
 CREATE OR REPLACE VIEW raw_cuarentena AS SELECT * FROM read_parquet('{root}/fact_cuarentena/*/*.parquet', union_by_name=true, hive_partitioning=true);
 
 -- --- bitemporal ------------------------------------------------------------
@@ -580,6 +831,8 @@ JOIN publicacion_vigente v
   ON v.periodo_informacion = r.periodo_informacion
  AND v.zip_origen = r.zip_origen AND v.recencia = 1;
 
+CREATE OR REPLACE VIEW fact_equity     AS SELECT * FROM raw_equity;
+CREATE OR REPLACE VIEW fact_fondo      AS SELECT * FROM raw_fondo;
 CREATE OR REPLACE VIEW fact_garantia   AS SELECT * FROM raw_garantia;
 CREATE OR REPLACE VIEW fact_cuarentena AS SELECT * FROM raw_cuarentena;
 """
@@ -602,7 +855,8 @@ def construir_duckdb(out: Path, db: Path) -> dict[str, int]:
     con.execute(DDL.format(root=out.as_posix()))
 
     conteos: dict[str, int] = {}
-    for t in ("fact_derivado", "fact_renta_fija", "fact_garantia", "fact_cuarentena",
+    for t in ("fact_derivado", "fact_renta_fija", "fact_equity", "fact_fondo",
+              "fact_garantia", "fact_cuarentena",
               "dim_periodo", "dim_compania", "dim_contraparte", "dim_instrumento"):
         try:
             conteos[t] = con.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]

@@ -1,0 +1,9 @@
+# Configuracion de despliegue. No se toca enableCORS ni enableXsrfProtection:
+# bajarlas deja la app abierta a conexiones de cualquier origen, y esta va a
+# vivir en una URL publica.
+[browser]
+gatherUsageStats = false
+
+[theme]
+base = "light"
+primaryColor = "#004481"
