@@ -48,6 +48,7 @@ import logging
 from dataclasses import dataclass, field as _dc_field
 from decimal import Decimal
 from enum import Enum
+from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
 __all__ = [
@@ -59,6 +60,55 @@ __all__ = [
 ]
 
 _LOG = logging.getLogger(__name__)
+
+
+class UFSeries:
+    """Serie de la Unidad de Fomento, leida de disco.
+
+    La descarga vive en ``utils/fetch_uf.py`` y deja el archivo en
+    ``config/series/uf.json``. Aqui solo se lee: el validador no habla por red.
+    Un veredicto que dependa de si habia internet a esa hora no es un
+    veredicto, y una corrida que no se puede repetir no sirve de evidencia.
+    """
+
+    __slots__ = ("cierre_mes", "diaria", "fuente", "path")
+
+    def __init__(self, cierre_mes: dict[int, Decimal], diaria: dict[str, Decimal],
+                 fuente: str = "", path: str = "") -> None:
+        self.cierre_mes = cierre_mes
+        self.diaria = diaria
+        self.fuente = fuente
+        self.path = path
+
+    @classmethod
+    def from_json(cls, path: "str | Path") -> "UFSeries":
+        import json
+        path = Path(path)
+        doc = json.loads(path.read_text(encoding="utf-8"))
+        cierre = {
+            int(per): Decimal(str(d["valor"] if isinstance(d, dict) else d))
+            for per, d in (doc.get("cierre_mes") or {}).items()
+        }
+        diaria = {f: Decimal(str(v)) for f, v in (doc.get("diaria") or {}).items()}
+        return cls(cierre, diaria, str(doc.get("fuente", "")), str(path))
+
+    @classmethod
+    def cargar_o_none(cls, path: "str | Path | None" = None) -> "UFSeries | None":
+        """Carga la serie si existe. Si no, el validador sigue sin las reglas UF."""
+        path = Path(path or (Path(__file__).resolve().parents[1] / "config" / "series" / "uf.json"))
+        if not path.exists():
+            _LOG.warning("Serie UF ausente en %s: las reglas que dependen de la UF "
+                         "quedaran sin evaluar. Corre `python -m utils.fetch_uf`.", path)
+            return None
+        try:
+            return cls.from_json(path)
+        except Exception as e:                      # noqa: BLE001
+            _LOG.error("Serie UF ilegible en %s: %s", path, e)
+            return None
+
+    def al_cierre(self, periodo: int | None) -> Decimal | None:
+        """Valor de la UF al cierre del periodo AAAAMM."""
+        return self.cierre_mes.get(int(periodo)) if periodo else None
 
 
 class Verdict(str, Enum):
@@ -86,6 +136,17 @@ class Tolerances:
     relative: Decimal = Decimal("1e-6")
     mtm_relative: Decimal = Decimal("0.02")
     mtm_absolute_floor: Decimal = Decimal("10")
+    #: Error relativo maximo al reconstruir la UF desde el propio registro.
+    #: Los montos vienen en M$ redondeados al entero superior, asi que una
+    #: posicion chica arrastra bastante redondeo; 0,5% lo absorbe sin dejar
+    #: pasar un valor comercial informado en la unidad equivocada.
+    uf_relative: Decimal = Decimal("0.005")
+    #: Piso en UF bajo el cual no se exige la identidad: con tenencias muy
+    #: chicas el redondeo a M$ domina por completo.
+    uf_min_unidades: Decimal = Decimal("100")
+    #: Cociente vigente/nominal por encima del cual el registro se cuarentena
+    #: igual: ninguna capitalizacion contractual llega a duplicar el nominal.
+    accretion_max: Decimal = Decimal("2.0")
 
 
 @dataclass(frozen=True, slots=True)
@@ -149,6 +210,8 @@ class ArithmeticValidator:
         tolerances: Tolerances | None = None,
         *,
         day_count: Decimal = Decimal(360),
+        uf: "UFSeries | None" = None,
+        uf_path: "str | Path | None" = None,
     ) -> None:
         """
         Args:
@@ -157,9 +220,12 @@ class ArithmeticValidator:
                 declara la convencion, asi que se prueban ACT/360 y ACT/365 y
                 se acepta la que cierre mejor; este valor es solo el punto de
                 partida.
+            uf: Serie de la UF ya cargada. Si se omite se lee de disco.
+            uf_path: Ruta alternativa a la serie UF.
         """
         self.tol = tolerances or Tolerances()
         self.day_count = day_count
+        self.uf = uf if uf is not None else UFSeries.cargar_o_none(uf_path)
 
     # -- despacho ------------------------------------------------------------
 
@@ -223,7 +289,8 @@ class ArithmeticValidator:
         key = (letter.upper(), str(record_type))
         table: dict[tuple[str, str], list[Callable[..., CheckResult]]] = {
             ("P", "3"): [self.check_forward_notional, self.check_forward_mtm],
-            ("I", "2"): [self.check_bond_tenor, self.check_bond_nominal_vigente],
+            ("I", "2"): [self.check_bond_tenor, self.check_bond_nominal_vigente,
+                         self.check_uf_valor_comercial],
         }
         return table.get(key, [])
 
@@ -394,23 +461,105 @@ class ArithmeticValidator:
             Decimal(months), declared, "tolerancia +/- 1 mes",
         )
 
+    def check_uf_valor_comercial(
+        self, f: Mapping[str, Any], periodo: int | None = None
+    ) -> CheckResult:
+        """El valor comercial informado en M$ y en UF tiene que dar la UF real.
+
+        La CMF pide el mismo valor comercial dos veces: en moneda de
+        presentacion (``VALOR_COMERCIAL_MP``, en miles de pesos) y en la unidad
+        del instrumento (``VALOR_COMERCIAL_UM``). Para un papel en UF eso
+        significa que
+
+            VALOR_COMERCIAL_MP x 1000 / VALOR_COMERCIAL_UM  =  UF al cierre
+
+        y ese numero es publico. Es la unica identidad del anexo que se puede
+        comprobar contra una referencia externa en vez de contra el propio
+        registro, asi que caza cosas que ninguna identidad interna ve: un
+        valor comercial informado en pesos en vez de miles, o en la moneda
+        equivocada.
+
+        Medida sobre los datos reales, la identidad cierra al centavo: en
+        202501, 202506, 202512 y 202608 la UF implicita coincide con la
+        publicada con desvio 0,0000%.
+        """
+        rule = "renta_fija.valor_comercial_uf"
+        if f.get("UNIDAD_MONETARIA") != "UF":
+            return CheckResult(rule, None, detail="El instrumento no esta en UF")
+        if self.uf is None:
+            return CheckResult(rule, None, detail="Serie UF no disponible en disco")
+
+        uf_ref = self.uf.al_cierre(periodo)
+        if uf_ref is None:
+            return CheckResult(rule, None, detail=f"Sin UF para el periodo {periodo}")
+
+        mp, um = _dec(f.get("VALOR_COMERCIAL_MP")), _dec(f.get("VALOR_COMERCIAL_UM"))
+        if not mp or not um or um <= 0:
+            return CheckResult(rule, None, detail="Valor comercial no informado")
+        if um < self.tol.uf_min_unidades:
+            return CheckResult(rule, None, detail="Tenencia muy chica: domina el redondeo a M$")
+
+        implicita = mp * Decimal(1000) / um
+        return CheckResult(
+            rule, abs(implicita - uf_ref) <= uf_ref * self.tol.uf_relative,
+            uf_ref, implicita, "UF reconstruida desde el propio registro",
+        )
+
     def check_bond_nominal_vigente(
         self, f: Mapping[str, Any], periodo: int | None = None
     ) -> CheckResult:
-        """El nominal vigente nunca puede superar al nominal original.
+        """Relacion entre el nominal vigente y el nominal original.
 
-        Solo se informa para BE, EC, MHA, MHB y BS; en el resto va en ceros,
-        y entonces la regla no aplica en vez de fallar.
+        La lectura intuitiva es que el vigente solo descuenta amortizaciones y
+        por lo tanto nunca supera al nominal. Los datos dicen otra cosa, y vale
+        la pena dejar escrito por que, porque cuesta un rato volver a
+        descubrirlo:
+
+        * En 3.632 de 3.633 pares (nemotecnico, periodo) el cociente
+          vigente/nominal es UNICO -- no depende de cuanto tenga cada
+          compania, solo de la serie.
+        * Ese cociente CAMBIA entre periodos (1.052 de 1.080 series), o sea
+          avanza con el tiempo.
+        * No lo explica ninguna fecha del registro: probando emision, compra,
+          inscripcion y pago contra la UF hubo 1 acierto en 84.
+        * Y afecta tambien a papeles en PESOS (55 casos), que por definicion
+          no se reajustan por UF.
+
+        Es decir: no es indexacion, es la tabla de desarrollo de la serie
+        (capitalizacion contractual), que vive en el anexo B.10 y todavia no
+        esta transcrito. Sin esa tabla la identidad NO SE PUEDE evaluar, y un
+        registro que no se puede comprobar no es un registro que descuadra:
+        se informa como no evaluable, no como cuarentena.
+
+        Lo que si se mantiene en cuarentena es lo economicamente absurdo. Un
+        vigente que mas que duplica al nominal no se explica por ninguna
+        capitalizacion razonable y merece que alguien lo mire.
         """
-        rule = "renta_fija.valor_nominal_vigente <= valor_nominal"
+        rule = "renta_fija.valor_nominal_vigente"
         nominal = _dec(f.get("VALOR_NOMINAL"))
         current = _dec(f.get("VALOR_NOMINAL_VIGENTE"))
 
         if nominal is None or current is None or current == 0:
             return CheckResult(rule, None, detail="No aplica a este tipo de instrumento")
+        if nominal <= 0:
+            return CheckResult(rule, None, detail="Nominal en cero: la razon no esta definida")
+
+        techo = nominal * (Decimal(1) + self.tol.relative)
+        if current <= techo:
+            return CheckResult(rule, True, nominal, current,
+                               "el vigente descuenta amortizaciones")
+
+        razon = current / nominal
+        if razon > self.tol.accretion_max:
+            return CheckResult(
+                rule, False, nominal, current,
+                f"el vigente es {razon:.2f}x el nominal: ninguna capitalizacion "
+                f"razonable llega ahi",
+            )
         return CheckResult(
-            rule, current <= nominal * (Decimal(1) + self.tol.relative),
-            nominal, current, "el vigente descuenta amortizaciones",
+            rule, None, nominal, current,
+            f"vigente {razon:.5f}x el nominal: requiere la tabla de desarrollo "
+            f"del instrumento (anexo B.10, sin transcribir) para comprobarse",
         )
 
     # -- utilidades ----------------------------------------------------------
