@@ -92,9 +92,25 @@ _NOCIONAL: dict[str, tuple[str, ...]] = {
     "6": ("ACTIVO_OBJETO(monto)(M$)",),
 }
 
-_MTM = {
-    "activo": ("MONTO(activo)",),
-    "pasivo": ("MONTO(pasivo)",),
+#: Tasa o precio PACTADO en el contrato, por producto. Cada derivado expresa
+#: su precio en un campo distinto; la vista de price discovery necesita una
+#: sola columna comparable, con su procedencia al lado.
+_TASA_CONTRATO: dict[str, tuple[str, ...]] = {
+    "2": ("PRECIO_DE_EJERCICIO",),
+    "3": ("PRECIO_FORWARD_CONTRATO",),
+    "4": ("PRECIO_FUTURO_DE_MERCADO_AL_INICIO_DE_LA_OPERACION",),
+    "5": ("TASA_A_FUTURO_CONTRATO_POSICION_LARGA", "TASA_A_FUTURO_CONTRATO_POSICION_CORTA"),
+    "6": ("TASA_PACTO", "TIR_COMPRA"),
+}
+
+#: El mismo precio, pero de mercado a la fecha de informacion. La diferencia
+#: contra el pactado es justamente lo que la mesa quiere ver.
+_TASA_MERCADO: dict[str, tuple[str, ...]] = {
+    "2": ("PRECIO_SPOT_DEL_ACTIVO_SUBYACENTE",),
+    "3": ("PRECIO_FORWARD_MERCADO",),
+    "4": ("PRECIO_FUTURO_DE_MERCADO_A_LA_FECHA_DE_INFORMACION",),
+    "5": ("TASA_A_FUTURO_MERCADOPOSICION_LARGA", "TASA_A_FUTURO_MERCADO_POSICION_CORTA"),
+    "6": ("TASA_O_PRECIO_DE_MERCADO",),
 }
 
 
@@ -121,6 +137,43 @@ def _txt(v: Any) -> str | None:
         return None
     s = str(v).strip()
     return s or None
+
+
+_RE_TASA = re.compile(r"(-?\d+(?:[.,]\d+)?)")
+
+
+def _tasa_mixta(v: Any) -> tuple[float | None, str | None]:
+    """Separa una tasa que viene como texto en un numero y su tipo.
+
+    En los swaps la CMF informa la tasa del contrato como texto:
+    ``'FIJA 5.11'``, ``'VARIABLE 3.2'``. Pasarla por float() devuelve None y
+    deja los 69.639 swaps sin tasa, que es justo el producto mas grande del
+    libro. Se parte en el numero y la etiqueta, y se guardan los dos.
+    """
+    if v is None:
+        return None, None
+    if isinstance(v, (int, float, Decimal)) and not isinstance(v, bool):
+        return float(v), None
+    s = str(v).strip()
+    if not s:
+        return None, None
+    m = _RE_TASA.search(s)
+    num = float(m.group(1).replace(",", ".")) if m else None
+    # Lo que queda tras sacar el numero trae basura de formato ('FIJA %',
+    # 'FIJA  %'); se deja solo la etiqueta.
+    etiqueta = _RE_TASA.sub(" ", s)
+    etiqueta = re.sub(r"[^A-Za-z_]+", " ", etiqueta).strip().upper() or None
+    return num, etiqueta
+
+
+def _first_tasa(f: Mapping[str, Any],
+                nombres: Iterable[str]) -> tuple[float | None, str | None, str | None]:
+    """Primera tasa con valor, con su tipo y el campo del que salio."""
+    for n in nombres:
+        num, etiqueta = _tasa_mixta(f.get(n))
+        if num is not None:
+            return num, etiqueta, n
+    return None, None, None
 
 
 def _first(f: Mapping[str, Any], nombres: Iterable[str]) -> tuple[float | None, str | None]:
@@ -192,6 +245,8 @@ class RowBuilder:
                  veredicto: Any) -> dict[str, Any]:
         f = rec.fields
         nocional, origen = _first(f, _NOCIONAL.get(rec.record_type, ()))
+        tasa_c, tasa_tipo, origen_tasa = _first_tasa(f, _TASA_CONTRATO.get(rec.record_type, ()))
+        tasa_m, _, _ = _first_tasa(f, _TASA_MERCADO.get(rec.record_type, ()))
         largo, _ = _first(f, ("NOCIONAL_POSICION_LARGA(monto)", "ACTIVO_OBJETO_POSICION_LARGA(monto)"))
         corto, _ = _first(f, ("NOCIONAL_POSICION_CORTA(monto)", "ACTIVO_OBJETO_POSICION_CORTA(monto)"))
         row = self._base(rec, zip_origen, descargado)
@@ -213,6 +268,20 @@ class RowBuilder:
             "mtm_activo_m": _num(f.get("MONTO(activo)")),
             "mtm_pasivo_m": _num(f.get("MONTO(pasivo)")),
             "margen_m": _num(f.get("MONTO_ACTIVOS_EN_MARGEN")),
+            "tasa_precio_contrato": tasa_c,
+            "tasa_precio_origen": origen_tasa,
+            "tasa_tipo": tasa_tipo,
+            "tasa_precio_mercado": tasa_m,
+            "precio_spot": _num(f.get("PRECIO_SPOT_DEL_ACTIVO_SUBYACENTE") or f.get("PRECIO_SPOT_")),
+            "tasa_descuento": _num(f.get("TASA_DESCUENTO_DE_FLUJOS")),
+            "tir_compra": _num(f.get("TIR_COMPRA")),
+            "clasificacion_riesgo": _txt(f.get("CLASIFICACION_DE_RIESGO")),
+            "tipo_contrato": _txt(f.get("TIPO_CONTRATO")),
+            "tipo_contraparte": _txt(f.get("TIPO_CONTRAPARTE")),
+            "cm_compensacion_bilateral": _txt(f.get("CM_COMPENSACION_BILATERAL")),
+            "tipo_documentacion": _txt(f.get("TIPO_DOCUMENTACION")),
+            "activo_objeto_largo": _txt(f.get("ACTIVO_OBJETO_POSICION_LARGA(nombre)")),
+            "activo_objeto_corto": _txt(f.get("ACTIVO_OBJETO_POSICION_CORTA_(nombre)")),
             "relacionado": _txt(f.get("RELACIONADO")),
             "nacionalidad_contraparte": _txt(f.get("NACIONALIDAD")),
             "clasif_valoriz_eeff": _txt(f.get("METOD_CLASIF_VALORIZ_EEFF")),
@@ -244,6 +313,19 @@ class RowBuilder:
             "fecha_compra": f.get("FECHA_COMPRA"),
             "fecha_vencimiento": f.get("FECHA_VENCIMIENTO"),
             "clasif_valoriz_eeff": _txt(f.get("METOD_CLASIF_VALORIZ_EEFF")),
+            "clasificacion_riesgo": _txt(f.get("CLASIFICACION_DE_RIESGO")),
+            "clasificacion_inversion": _txt(f.get("CLASIFICACION_INVERSION")),
+            "incremento_riesgo": _txt(f.get("INCREMENTO_RIESGO")),
+            "plazo_al_vencimiento": _num(f.get("PLAZO_AL_VENCIMIENTO")),
+            "tasa_base": _num(f.get("TASA_BASE")),
+            "spread_emision": _num(f.get("SPREAD_A_LA_EMISION")),
+            "tir_compra": _num(f.get("TIR_COMPRA")),
+            "tir_mercado": _num(f.get("TIR_MERCADO")),
+            "tir_sin_costo": _num(f.get("TIR_SIN_COSTO")),
+            "tasa_pacto": _num(f.get("TASA_PACTO")),
+            "fuente_precios": _txt(f.get("FUENTE_PRECIOS")),
+            "prohibicion": _txt(f.get("PROHIBICION")),
+            "custodia": _txt(f.get("CUSTODIA_INV")),
             "veredicto": veredicto.verdict.value,
         })
         return row
@@ -253,10 +335,26 @@ class RowBuilder:
         f = rec.fields
         row = self._base(rec, zip_origen, descargado)
         row.update({
-            "folio_operacion": _txt(f.get("FOLIO_OPERACION")),
+            # Quien postea a quien: POSICION_COMPANIA dice si la aseguradora
+            # entrega o recibe el colateral. Sin ese campo la tabla no
+            # distingue las dos direcciones y el mapa no sirve.
+            "posicion_compania": _txt(f.get("POSICION_COMPANIA")),
             "tipo_garantia": _txt(f.get("TIPO_GARANTIA")),
-            "monto_m": _num(f.get("MONTO") or f.get("MONTO_GARANTIA")),
-            "moneda": _txt(f.get("MONEDA")),
+            "tipo_activo": _txt(f.get("TIPO_ACTIVO_EN_GARANTIA")),
+            "identificador_garantia": _txt(f.get("IDENTIFICADOR_GARANTIA")),
+            "folio_instrumento": _txt(f.get("FOLIO_INSTRUMENTO_EN_GARANTIA")),
+            "item_instrumento": _txt(f.get("ITEM_INSTRUMENTO_EN_GARANTIA")),
+            "codigo_instrumento": _txt(f.get("CODIGO_IDENTIFICACION_INSTRUMENTO_EN_GARANTIA")),
+            "valor_nominal_instrumento": _num(f.get("VALOR_NOMINAL_INSTRUMENTO_EN_GARANTIA")),
+            "moneda": _txt(f.get("MONEDA_DENOMINACION_ACTIVO_EN_GARANTIA")),
+            "clasificacion_riesgo_pais": _txt(f.get("CLASIFICACION_DE_RIESGO_PAIS")),
+            "valor_contable_um": _num(f.get("VALOR_CONTABLE_ACTIVO_EN_GARANTIA_UM")),
+            "valor_contable_m": _num(f.get("VALOR_CONTABLE_ACTIVO_EN_GARANTIA_M$")),
+            "valor_razonable_um": _num(f.get("VALOR_RAZONABLE_ACTIVO_EN_GARANTIA_UM")),
+            "monto_m": _num(f.get("VALOR_RAZONABLE_ACTIVO_EN_GARANTIA_M$")),
+            "cuenta_eeff": _txt(f.get("CUENTA_EEFF_DE_REGISTRO_DE_LA_GARANTIA")),
+            "relacionado": _txt(f.get("RELACIONADO")),
+            "nacionalidad_contraparte": _txt(f.get("NACIONALIDAD_CONTRAPARTE_GARANTIA")),
             "veredicto": veredicto.verdict.value,
         })
         row.update(self._contraparte(f))
@@ -285,7 +383,8 @@ class RowBuilder:
 class Loader:
     """Recorre los ZIP y escribe Parquet particionado por periodo."""
 
-    HECHOS = ("fact_derivado", "fact_renta_fija", "fact_garantia", "fact_cuarentena")
+    HECHOS = ("fact_derivado", "fact_renta_fija", "fact_garantia", "fact_cuarentena",
+              "dim_compania_src")
 
     def __init__(self, out: Path, *, layouts: Path = LAYOUTS, entities: Path = ENTITIES) -> None:
         self.out = out
@@ -326,6 +425,15 @@ class Loader:
     def _fila(self, rec: ParsedRecord, zip_origen: str,
               descargado: str) -> tuple[str, dict[str, Any]] | None:
         L, t = rec.letter, rec.record_type
+        # El nombre de la aseguradora vive en el registro de identificacion,
+        # no en el detalle. Sin el, el Whitespace Map muestra RUT desnudos.
+        if t == "1":
+            return "dim_compania_src", {
+                "rut_compania": rec.rut_compania,
+                "nombre": _txt(rec.fields.get("NOMBRE")),
+                "dv": _txt(rec.fields.get("VERIFICADOR")),
+                "periodo_informacion": rec.periodo,
+            }
         if L == "P" and t in PRODUCTO:
             v = self.validator.validate(L, t, rec.fields,
                                         untrusted=rec.untrusted, periodo=rec.periodo)
@@ -421,11 +529,16 @@ FROM (SELECT DISTINCT periodo_informacion FROM raw_derivado
 LEFT JOIN uf_cierre_mes u ON u.periodo = d.periodo_informacion;
 
 CREATE OR REPLACE TABLE dim_compania AS
-SELECT rut_compania, MAX(nombre) AS nombre, COUNT(*) AS registros
-FROM (
-    SELECT rut_compania, NULL::VARCHAR AS nombre FROM raw_derivado
-    UNION ALL SELECT rut_compania, NULL FROM raw_renta_fija
-) GROUP BY rut_compania;
+SELECT
+    rut_compania,
+    -- El nombre mas reciente gana: una compania se fusiona o cambia de razon
+    -- social y no queremos el de hace dos anios.
+    ARG_MAX(nombre, periodo_informacion) AS nombre,
+    ANY_VALUE(dv)                        AS dv,
+    COUNT(*)                             AS publicaciones
+FROM read_parquet('{root}/dim_compania_src/*/*.parquet', union_by_name=true, hive_partitioning=true)
+WHERE rut_compania IS NOT NULL
+GROUP BY rut_compania;
 
 CREATE OR REPLACE TABLE dim_contraparte AS
 SELECT
