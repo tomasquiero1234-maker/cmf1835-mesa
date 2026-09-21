@@ -127,6 +127,14 @@ def main(argv: list[str] | None = None) -> int:
         dst.execute(f"DELETE FROM dim_periodo WHERE periodo NOT IN ({lista})")
         filas["dim_periodo"] = dst.execute("SELECT COUNT(*) FROM dim_periodo").fetchone()[0]
 
+    # Las vistas de clasificacion (clase de activo, apellido del instrumento)
+    # se crean sobre las tablas, no se copian: si se generaran en el warehouse
+    # completo y no se recrean aqui, la muestra de despliegue queda sin ellas
+    # y el dashboard revienta en produccion con un CatalogException -- exactamente
+    # lo que paso la primera vez que se genero esta muestra.
+    from warehouse.clases import SQL_CLASES
+    dst.execute(SQL_CLASES)
+
     dst.execute("DETACH origen")
     dst.execute("CHECKPOINT")
     dst.close()
