@@ -1031,6 +1031,11 @@ def construir_duckdb(out: Path, db: Path) -> dict[str, int]:
 
     con.execute(DDL.format(root=out.as_posix()))
 
+    # Vistas de clasificacion: la clase de activo y el "apellido" de cada
+    # instrumento. Van despues del DDL porque leen de los hechos.
+    from warehouse.clases import SQL_CLASES
+    con.execute(SQL_CLASES)
+
     conteos: dict[str, int] = {}
     for t in ("fact_derivado", "fact_renta_fija", "fact_extranjero_rf", "fact_extranjero_rv",
               "fact_equity", "fact_fondo", "fact_otras_inv", "fact_control",

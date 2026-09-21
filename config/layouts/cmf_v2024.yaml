@@ -698,7 +698,7 @@ files:
         - {name: "UBICACION", pic: "X(40)", start: 148, len: 40, kind: text, dec: 0, signed: false, prov: official}
         - {name: "COMUNA", pic: "X(03)", start: 188, len: 3, kind: text, dec: 0, signed: false, prov: official}
         - {name: "CIUDAD", pic: "X(30)", start: 191, len: 30, kind: text, dec: 0, signed: false, prov: official}
-        - {name: "FECHA_DE_COMPRA", pic: "9(08)", start: 221, len: 8, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "FECHA_DE_COMPRA", pic: "9(08)", start: 221, len: 8, kind: date, dec: 0, signed: false, prov: official}
         - {name: "COMPRA_ENTIDAD_RELACIONADA", pic: "X(01)", start: 229, len: 1, kind: text, dec: 0, signed: false, prov: official}
         - {name: "COSTO_ACTUALIZADO", pic: "9(11)", start: 230, len: 11, kind: num, dec: 0, signed: false, prov: official}
         - {name: "DEPRECIACION_ACUMULADA", pic: "9(11)", start: 241, len: 11, kind: num, dec: 0, signed: false, prov: official}
@@ -708,8 +708,8 @@ files:
         - {name: "TASACION_2", pic: "9(11)", start: 278, len: 11, kind: num, dec: 0, signed: false, prov: official}
         - {name: "NOMBRE_DEL_TASADOR_1", pic: "X(40)", start: 289, len: 40, kind: text, dec: 0, signed: false, prov: official}
         - {name: "NOMBRE_DEL_TASADOR_2", pic: "X(40)", start: 329, len: 40, kind: text, dec: 0, signed: false, prov: official}
-        - {name: "FECHA_TASACION_1", pic: "9(08)", start: 369, len: 8, kind: num, dec: 0, signed: false, prov: official}
-        - {name: "FECHA_TASACION_2", pic: "9(08)", start: 377, len: 8, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "FECHA_TASACION_1", pic: "9(08)", start: 369, len: 8, kind: date, dec: 0, signed: false, prov: official}
+        - {name: "FECHA_TASACION_2", pic: "9(08)", start: 377, len: 8, kind: date, dec: 0, signed: false, prov: official}
         - {name: "TOTAL_M2_TERRENO", pic: "9(7)", start: 385, len: 7, kind: num, dec: 0, signed: false, prov: official}
         - {name: "TOTAL_M2_CONSTRUCCION", pic: "9(7)", start: 392, len: 7, kind: num, dec: 0, signed: false, prov: official}
         - {name: "VALOR_TASACION_TERRENO_M2", pic: "9(04)V9(02)", start: 399, len: 6, kind: num, dec: 2, signed: false, prov: official}
@@ -757,9 +757,9 @@ files:
         - {name: "NOMBRE_DEL_EMISOR", pic: "X(40)", start: 45, len: 40, kind: text, dec: 0, signed: false, prov: official}
         - {name: "CODIGO_INDIVIDUALIZACION_O_NEMOTECNICO", pic: "X(30)", start: 85, len: 30, kind: text, dec: 0, signed: false, prov: official}
         - {name: "MONEDA", pic: "X(06)", start: 115, len: 6, kind: text, dec: 0, signed: false, prov: official}
-        - {name: "FECHA_EMISION", pic: "9(08)", start: 121, len: 8, kind: num, dec: 0, signed: false, prov: official}
-        - {name: "FECHA_COMPRA", pic: "9(08)", start: 129, len: 8, kind: num, dec: 0, signed: false, prov: official}
-        - {name: "FECHA_VENCIMIENTO", pic: "9(08)", start: 137, len: 8, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "FECHA_EMISION", pic: "9(08)", start: 121, len: 8, kind: date, dec: 0, signed: false, prov: official}
+        - {name: "FECHA_COMPRA", pic: "9(08)", start: 129, len: 8, kind: date, dec: 0, signed: false, prov: official}
+        - {name: "FECHA_VENCIMIENTO", pic: "9(08)", start: 137, len: 8, kind: date, dec: 0, signed: false, prov: official}
         - {name: "PLAZO_ALVENCIMIENTO", pic: "9(03)", start: 145, len: 3, kind: num, dec: 0, signed: false, prov: official}
         - {name: "DURACION", pic: "9(02)V9(02)", start: 148, len: 4, kind: num, dec: 2, signed: false, prov: official}
         - {name: "TIPO_AMORTIZACION", pic: "9(02)", start: 152, len: 2, kind: num, dec: 0, signed: false, prov: official}
@@ -881,13 +881,13 @@ files:
         - {name: "UBICACION", pic: "X(40)", start: 79, len: 40, kind: text, dec: 0, signed: false, prov: official}
         - {name: "SALDO_PLAZO_ARRIENDO", pic: "9(03)", start: 119, len: 3, kind: num, dec: 0, signed: false, prov: official}
         - {name: "MONTO_ARRIENDO", pic: "9(04)V9(02)", start: 122, len: 6, kind: num, dec: 2, signed: false, prov: official}
-        - {name: "FECHA_COMPRA", pic: "9(08)", start: 128, len: 8, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "FECHA_COMPRA", pic: "9(08)", start: 128, len: 8, kind: date, dec: 0, signed: false, prov: official}
         - {name: "MONEDA", pic: "X(06)", start: 136, len: 6, kind: text, dec: 0, signed: false, prov: official}
         - {name: "COSTO_HISTORICO_CORREGIDO", pic: "9(11)", start: 142, len: 11, kind: num, dec: 0, signed: false, prov: official}
         - {name: "DEPRECIACION_ACUMULADA", pic: "9(11)", start: 153, len: 11, kind: num, dec: 0, signed: false, prov: official}
         - {name: "VALOR_CONTABLE", pic: "9(11)", start: 164, len: 11, kind: num, dec: 0, signed: false, prov: official}
         - {name: "VALOR_TASACION", pic: "9(11)", start: 175, len: 11, kind: num, dec: 0, signed: false, prov: official}
-        - {name: "FECHA_DE_TASACION", pic: "9(08)", start: 186, len: 8, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "FECHA_DE_TASACION", pic: "9(08)", start: 186, len: 8, kind: date, dec: 0, signed: false, prov: official}
         - {name: "TOTAL_M2_TERRENO", pic: "9(7)", start: 194, len: 7, kind: num, dec: 0, signed: false, prov: official}
         - {name: "TOTAL_M2_CONSTRUCCION", pic: "9(7)", start: 201, len: 7, kind: num, dec: 0, signed: false, prov: official}
         - {name: "VALOR_TASACION_TERRENO_M2", pic: "9(04)V9(02)", start: 208, len: 6, kind: num, dec: 2, signed: false, prov: official}
@@ -908,11 +908,11 @@ files:
         - {name: "CLASIFICACION_DE_RIESGO_PAIS", pic: "X(4)", start: 13, len: 4, kind: text, dec: 0, signed: false, prov: official}
         - {name: "REGULADOR", pic: "X(40)", start: 17, len: 40, kind: text, dec: 0, signed: false, prov: official}
         - {name: "NOMBRE_FILIAL", pic: "X(30)", start: 57, len: 30, kind: text, dec: 0, signed: false, prov: official}
-        - {name: "FECHA_COMPRA", pic: "9(08)", start: 87, len: 8, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "FECHA_COMPRA", pic: "9(08)", start: 87, len: 8, kind: date, dec: 0, signed: false, prov: official}
         - {name: "PARTICIPACION_PORCENTUAL", pic: "9(03)V9(02)", start: 95, len: 5, kind: num, dec: 2, signed: false, prov: official}
         - {name: "PATRIMONIO_FILIAL", pic: "-9(13)", start: 100, len: 14, kind: num, dec: 0, signed: true, prov: official}
         - {name: "RESULTADO_DE_LASOCIEDAD_FILIAL", pic: "-9(13)", start: 114, len: 14, kind: num, dec: 0, signed: true, prov: official}
-        - {name: "FECHA_ESTADOS_FINANCIEROS", pic: "9(08)", start: 128, len: 8, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "FECHA_ESTADOS_FINANCIEROS", pic: "9(08)", start: 128, len: 8, kind: date, dec: 0, signed: false, prov: official}
         - {name: "VALOR_DE_MERCADO", pic: "9(13)", start: 136, len: 13, kind: num, dec: 0, signed: false, prov: official}
         - {name: "MAYOR_O_MENOR_VALOR_DE_INVERSIONES", pic: "-9(11)", start: 149, len: 12, kind: num, dec: 0, signed: true, prov: official}
         - {name: "VALOR_FINAL", pic: "9(12)", start: 161, len: 12, kind: num, dec: 0, signed: false, prov: official}
@@ -967,7 +967,7 @@ files:
         - {name: "CRITERIO_VALORIZACION", pic: "X(02)", start: 291, len: 2, kind: text, dec: 0, signed: false, prov: official}
         - {name: "MODELO_VALORACION", pic: "X(02)", start: 293, len: 2, kind: text, dec: 0, signed: false, prov: official}
         - {name: "MODELO_PROPIO_DETERIORO", pic: "X(02)", start: 295, len: 2, kind: text, dec: 0, signed: false, prov: official}
-        - {name: "FECHA_DE_INFORME", pic: "9(08)", start: 297, len: 8, kind: num, dec: 0, signed: false, prov: official}
+        - {name: "FECHA_DE_INFORME", pic: "9(08)", start: 297, len: 8, kind: date, dec: 0, signed: false, prov: official}
         - {name: "TIPO_DE_ACTIVO", pic: "X(60)", start: 305, len: 60, kind: text, dec: 0, signed: false, prov: official}
         - {name: "COLIGADA_FILIAL_INMOB", pic: "X(01)", start: 365, len: 1, kind: text, dec: 0, signed: false, prov: official}
         - {name: "DESCRIPCION_ACTIVOS", pic: "X(100)", start: 366, len: 100, kind: text, dec: 0, signed: false, prov: official}

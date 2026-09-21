@@ -13,6 +13,7 @@ correr mientras el loader recarga sin pelearse por el archivo.
 from __future__ import annotations
 
 import datetime as _dt
+import re
 import sys
 from pathlib import Path
 
@@ -59,6 +60,89 @@ BANCO_PROPIO = "BBVA"
 #: Producto a nivel util para la mesa. `subtipo` ya separa IRS de CCS, que son
 #: dos libros distintos aunque el anexo los meta en el mismo registro.
 COL_PRODUCTO = "subtipo"
+
+
+
+
+# ---------------------------------------------------------------------------
+#  formato para la mesa
+# ---------------------------------------------------------------------------
+
+#: Nombre corto por RUT. Se mapea por RUT y no por texto porque el nombre que
+#: informa cada compania cambia de un mes a otro -- "033 METLIFE CHILE SEGUROS
+#: DE VIDA S.A." no entra en el eje de un grafico ni en una celda de tabla.
+NOMBRE_CORTO: dict[int, str] = {
+    99289000: "MetLife",        76418751: "4Life",          76511423: "Alemana",
+    76632384: "Augustar",       96573600: "BCI Vida",       96656410: "BICE Vida",
+    96837630: "BNP Cardif",     76282191: "Bupa",           99027000: "Caja Re",
+    76477116: "CF Seguros",     99185000: "Chilena Consol.", 96579280: "CN Life",
+    76408757: "Colmena",        99003000: "Camara",         96571890: "Confuturo",
+    99012000: "Consorcio",      99588060: "Chubb",          77205281: "Divina Pastora",
+    99279000: "EuroAmerica",    76213329: "Help",           96933030: "Mapfre",
+    70015730: "Mutual Chile",   99024000: "Mut. Carabineros", 99025000: "Mut. Ejercito",
+    96687900: "Ohio National",  96812960: "Penta Vida",     96588080: "Principal",
+    78340993: "Principal Vida", 94716000: "Renta Nacional", 76034737: "Save BCJ",
+    96549050: "SURA Vida",      76263414: "Suramericana",   99301000: "Security",
+    76573480: "SegurosCL",      76632553: "UC Christus",    96819630: "Zurich Santander",
+}
+
+
+def corto(rut, nombre: str | None = None) -> str:
+    """Nombre corto de una aseguradora. Cae al nombre informado si no esta."""
+    try:
+        n = NOMBRE_CORTO.get(int(rut))
+        if n:
+            return n
+    except (TypeError, ValueError):
+        pass
+    if not nombre:
+        return str(rut)
+    # Se limpia lo que sobra: forma societaria, el '#' que algunos informantes
+    # escriben en vez de la enie, y el prefijo numerico de MetLife.
+    t = re.sub(r"\bS\.?\s?A\.?\b|\bLTDA\.?\b|\bCIA\.?\b|\bCOMPA[N#]?IA\b", "", str(nombre), flags=re.I)
+    t = t.replace("#", "N")
+    t = re.sub(r"^\d+\s+", "", t)
+    t = re.sub(r"\s+", " ", t).strip(" .,-")
+    return (t[:22] + "...") if len(t) > 25 else (t or str(rut))
+
+
+def limpiar_nombre(x: str | None) -> str:
+    """Quita el artefacto '#' que algunos informantes usan por la enie."""
+    return (str(x).replace("#", "N") if x is not None else "")
+
+
+#: Los montos del anexo vienen en M$ (miles de pesos). La mesa habla en MM$
+#: (millones), asi que se divide por mil una sola vez, aqui, y los ejes se
+#: rotulan MM$ en vez de dejar que plotly invente un sufijo 'B' o 'G'.
+M_A_MM = 1_000.0
+
+
+def a_mm(serie):
+    """M$ -> MM$."""
+    return serie / M_A_MM
+
+
+def eje_mm(fig, eje: str = "y", titulo: str = "Nocional (MM$)"):
+    """Fuerza separador de miles y rotulo explicito en MM$.
+
+    Sin esto plotly abrevia a '4B' o '120k', que en una mesa que mira pesos
+    chilenos y dolares al mismo tiempo se lee mal.
+    """
+    cfg = dict(tickformat=",.0f", separatethousands=True, title_text=titulo)
+    fig.update_yaxes(**cfg) if eje == "y" else fig.update_xaxes(**cfg)
+    return fig
+
+
+def tabla_miles(df, cols_monto=(), decimales: int = 0):
+    """Configuracion de columnas con separador de miles para st.dataframe."""
+    cfg = {}
+    for c in df.columns:
+        if c in cols_monto or any(k in c.lower() for k in
+                                  ("nocional", "monto", "valor", "mtm", "_mm", "_m$")):
+            cfg[c] = st.column_config.NumberColumn(c, format=f"%,.{decimales}f")
+        elif any(k in c.lower() for k in ("tasa", "tir", "spread", "duracion", "tenor")):
+            cfg[c] = st.column_config.NumberColumn(c, format="%.3f")
+    return cfg
 
 
 # ---------------------------------------------------------------------------
@@ -485,12 +569,15 @@ def vista_whitespace(f: dict) -> None:
     """)
     if df.empty:
         st.info("Sin datos para los filtros elegidos."); return
+    df["aseguradora"] = [corto(None, n) for n in df.aseguradora]
 
     c1, c2 = st.columns([1, 3])
-    modo = c1.radio("Metrica", ["Nocional (M$)", "Operaciones", "% de la aseguradora"],
+    modo = c1.radio("Metrica", ["Nocional (MM$)", "Operaciones", "% de la aseguradora"],
                     horizontal=False)
-    val = {"Nocional (M$)": "nocional_m", "Operaciones": "operaciones",
+    val = {"Nocional (MM$)": "nocional_m", "Operaciones": "operaciones",
            "% de la aseguradora": "nocional_m"}[modo]
+    if modo == "Nocional (MM$)":
+        df = df.assign(nocional_m=a_mm(df.nocional_m))
     piv = df.pivot_table(index="aseguradora", columns="grupo", values=val,
                          aggfunc="sum", fill_value=0)
     if modo == "% de la aseguradora":
@@ -501,9 +588,9 @@ def vista_whitespace(f: dict) -> None:
 
     fig = px.imshow(piv, aspect="auto", color_continuous_scale="Blues",
                     labels=dict(x="Grupo contraparte", y="Aseguradora", color=modo),
-                    text_auto=".0f" if modo != "Nocional (M$)" else False)
+                    text_auto=".0f" if modo != "Nocional (MM$)" else False)
     fig.update_layout(height=max(380, 26 * len(piv) + 160), margin=dict(l=8, r=8, t=30, b=8))
-    c2.plotly_chart(fig, width="stretch")
+    c2.plotly_chart(fig, width="stretch", key="whitespace_heat")
 
     huecos = int((piv == 0).sum().sum())
     st.metric("Celdas en blanco (sin relacion)", f"{huecos:,}",
@@ -557,7 +644,7 @@ def vista_rolloff(f: dict) -> None:
                  hover_data=["operaciones"])
     fig.update_layout(barmode="stack", height=520, margin=dict(l=8, r=8, t=30, b=8),
                       legend=dict(orientation="h", y=-0.2))
-    st.plotly_chart(fig, width="stretch")
+    st.plotly_chart(fig, width="stretch", key="vista_rolloff_g1")
 
     st.dataframe(
         df.pivot_table(index="balde", columns="grupo", values="nocional_m",
@@ -625,7 +712,7 @@ def vista_price_discovery(f: dict) -> None:
         })
     fig.update_layout(height=600, margin=dict(l=8, r=8, t=30, b=8),
                       legend=dict(orientation="h", y=-0.18))
-    st.plotly_chart(fig, width="stretch")
+    st.plotly_chart(fig, width="stretch", key="vista_price_discovery_g2")
 
     st.caption(f"{len(dfp):,} operaciones graficadas. "
                f"Campo de origen del precio: {', '.join(sorted(dfp['tasa_precio_origen'].dropna().unique()))}")
@@ -684,7 +771,7 @@ def vista_flujos(f: dict) -> None:
     ))
     fig.update_layout(height=520, yaxis_title="Nocional (M$)",
                       margin=dict(l=8, r=8, t=30, b=8))
-    st.plotly_chart(fig, width="stretch")
+    st.plotly_chart(fig, width="stretch", key="vista_flujos_g3")
     st.caption("`Δ ACTIVE` es el movimiento de nocional de las posiciones que siguen vivas "
                "(amortizacion o revaluacion). Sin ese termino la cascada no cuadra.")
 
@@ -702,7 +789,7 @@ def vista_flujos(f: dict) -> None:
                x="producto", y="n", color="categoria", barmode="stack",
                category_orders={"categoria": CATEGORIAS},
                labels={"n": "Posiciones"}).update_layout(height=340, margin=dict(t=30)),
-        width="stretch")
+        width="stretch", key="flujos_por_producto")
 
     # Una publicacion incompleta se lee como una fuga de clientes si nadie avisa.
     n_t = q(f"SELECT COUNT(DISTINCT rut_compania) n FROM fact_derivado "
@@ -728,7 +815,7 @@ def vista_garantias(f: dict) -> None:
     w = predicados_garantia(f)
     df = q(f"""
         SELECT d.periodo_informacion AS periodo,
-               {nombre_compania_sql()} AS aseguradora,
+               {nombre_compania_sql()} AS aseguradora_larga,
                d.rut_compania,
                d.contraparte_grupo, d.contraparte_nombre, d.contraparte_key,
                d.posicion_compania, d.tipo_garantia, d.tipo_activo,
@@ -742,6 +829,7 @@ def vista_garantias(f: dict) -> None:
     """)
     if df.empty:
         st.info("Sin garantias para los filtros elegidos."); return
+    df = _acortar_col(df)
 
     # TIPO_ACTIVO_EN_GARANTIA distingue efectivo de instrumento; se agrupa en
     # dos baldes legibles sin perder el codigo original, que queda en la tabla.
@@ -781,12 +869,12 @@ def vista_garantias(f: dict) -> None:
                x="contraparte_grupo", y="monto_m", color="clase_activo", barmode="stack",
                labels={"monto_m": "Monto (M$)", "contraparte_grupo": "Contraparte"})
           .update_layout(height=380, margin=dict(t=30), legend=dict(orientation="h", y=-0.3)),
-        width="stretch")
+        width="stretch", key="garantias_por_contraparte")
     c2.plotly_chart(
         px.pie(df.groupby("clase_activo").monto_m.sum().reset_index(),
                names="clase_activo", values="monto_m", hole=.45)
           .update_layout(height=380, margin=dict(t=30)),
-        width="stretch")
+        width="stretch", key="garantias_torta")
 
     st.markdown("**Detalle**")
     st.dataframe(df, width="stretch", hide_index=True)
@@ -817,7 +905,7 @@ def matriz_competencia(periodos: tuple[int, ...], w_extra: str) -> pd.DataFrame:
     cp = _col_producto()
     pers = ", ".join(str(x) for x in periodos) or "0"
     return q(f"""
-        SELECT {nombre_compania_sql()}            AS aseguradora,
+        SELECT {nombre_compania_sql()}            AS aseguradora_larga,
                d.rut_compania,
                d.{cp}                             AS producto,
                d.contraparte_grupo                AS banco,
@@ -832,7 +920,17 @@ def matriz_competencia(periodos: tuple[int, ...], w_extra: str) -> pd.DataFrame:
           AND d.{cp} IS NOT NULL
           {w_extra}
         GROUP BY 1, 2, 3, 4
-    """)
+    """).assign(**{})
+
+
+def _acortar_col(df, col_larga="aseguradora_larga", col_rut="rut_compania",
+                 destino="aseguradora"):
+    """Reemplaza el nombre informado por el nombre corto de la mesa."""
+    if df.empty:
+        return df
+    df = df.copy()
+    df[destino] = [corto(r, n) for r, n in zip(df[col_rut], df[col_larga])]
+    return df
 
 
 def vista_whitespace2(f: dict) -> None:
@@ -841,7 +939,7 @@ def vista_whitespace2(f: dict) -> None:
                f"En rojo: lo que hace con la competencia y **no** con {BANCO_PROPIO}.")
 
     per = tuple(sorted(f["periodos"])[-1:]) if f.get("solo_ultimo") else tuple(f["periodos"])
-    base = matriz_competencia(tuple(f["periodos"]), "")
+    base = _acortar_col(matriz_competencia(tuple(f["periodos"]), ""))
     if base.empty:
         st.info("Sin datos."); return
     if f.get("companias") and len(f["companias"]) < len(f.get("_companias_all", [])):
@@ -893,7 +991,7 @@ def vista_whitespace2(f: dict) -> None:
                       coloraxis_colorbar=dict(
                           tickvals=[-1, 0, 1],
                           ticktext=["Solo competencia", "Sin actividad", f"Con {BANCO_PROPIO}"]))
-    st.plotly_chart(fig, width="stretch")
+    st.plotly_chart(fig, width="stretch", key="vista_whitespace2_g4")
 
     st.markdown(f"**Oportunidades ordenadas por tamano** -- el cliente ya opera el producto, "
                 f"pero no con {BANCO_PROPIO}")
@@ -927,7 +1025,7 @@ def vista_oportunidades(f: dict) -> None:
 
     w = predicados_derivado(f, periodos=[foco])
     base = q(f"""
-        SELECT {nombre_compania_sql()} AS aseguradora, d.rut_compania,
+        SELECT {nombre_compania_sql()} AS aseguradora_larga, d.rut_compania,
                d.{cp} AS producto, d.contraparte_grupo AS banco,
                d.folio_operacion, d.fecha_vencimiento, d.moneda,
                COALESCE(d.nocional_m,0) AS nocional_m,
@@ -938,6 +1036,7 @@ def vista_oportunidades(f: dict) -> None:
     """)
     if base.empty:
         st.info("Sin datos para el periodo foco."); return
+    base = _acortar_col(base)
 
     alertas: list[dict] = []
 
@@ -962,7 +1061,7 @@ def vista_oportunidades(f: dict) -> None:
         })
 
     # --- 2. Whitespace de producto ------------------------------------------
-    mat = matriz_competencia(tuple(f["periodos"]), "")
+    mat = _acortar_col(matriz_competencia(tuple(f["periodos"]), ""))
     if not mat.empty:
         piv = mat.pivot_table(index=["aseguradora", "producto"], columns="banco",
                               values="nocional_m", aggfunc="sum", fill_value=0)
@@ -1092,18 +1191,446 @@ def vista_oportunidades(f: dict) -> None:
     seg["share_propio_%"] = (100 * seg.aseguradora.map(propio).fillna(0)
                              / seg.nocional.replace(0, pd.NA)).round(1).fillna(0)
     seg["segmento"] = seg.tamano.astype(str) + " / " + seg.sofisticacion + " / " + seg.apertura
-    st.dataframe(seg.sort_values("nocional", ascending=False), width="stretch",
-                 hide_index=True,
-                 column_config={"nocional": st.column_config.NumberColumn(
-                     "Nocional (M$)", format="%.0f")})
+    seg_tab = seg.assign(nocional_mm=a_mm(seg.nocional)).drop(columns=["nocional"])
+    st.dataframe(seg_tab.sort_values("nocional_mm", ascending=False), width="stretch",
+                 hide_index=True, column_config=tabla_miles(seg_tab))
+    seg_plot = seg.assign(nocional_mm=a_mm(seg.nocional))
     st.plotly_chart(
-        px.scatter(seg, x="bancos", y="nocional", size="operaciones", color="sofisticacion",
-                   hover_name="aseguradora", log_y=True,
-                   hover_data=["productos", "share_propio_%", "segmento"],
+        px.scatter(seg_plot, x="bancos", y="nocional_mm", size="operaciones",
+                   color="sofisticacion", hover_name="aseguradora", log_y=True,
+                   hover_data=["productos", "share_propio_%", "segmento",
+                               "operaciones", "bancos"],
                    labels={"bancos": "Bancos con los que opera",
-                           "nocional": "Nocional total (M$, log)"})
+                           "nocional_mm": "Nocional total (MM$, escala log)"})
           .update_layout(height=430, margin=dict(t=30)),
-        width="stretch")
+        width="stretch", key="vista_oportunidades_g5")
+
+
+
+
+# ---------------------------------------------------------------------------
+#  analisis por clase de activo
+# ---------------------------------------------------------------------------
+
+def _base_clasificada(f: dict, clases: tuple[str, ...] | None = None,
+                      periodos: list[int] | None = None):
+    """Derivados clasificados, con los filtros del sidebar aplicados."""
+    w = predicados_derivado(f, periodos=periodos)
+    filtro_clase = ""
+    if clases:
+        lista = ", ".join(_lit(c) for c in clases)
+        filtro_clase = f"{'AND' if w else 'WHERE'} d.clase_activo IN ({lista})"
+    return q(f"""
+        SELECT d.*, {nombre_compania_sql()} AS aseguradora_nombre
+        FROM v_derivado_clasificado d {JOIN_COMP}
+        {w} {filtro_clase}
+    """)
+
+
+def _con_cortos(df):
+    """Agrega la columna de nombre corto de la aseguradora."""
+    if df.empty:
+        return df
+    df = df.copy()
+    df["aseguradora"] = [corto(r, n) for r, n in
+                         zip(df.get("rut_compania", []), df.get("aseguradora_nombre", []))]
+    return df
+
+
+def vista_tasas(f: dict) -> None:
+    st.subheader("Tasas — Swap Scanner")
+    st.caption("IRS y forwards de inflacion. La curva es tasa fija contra tenor; "
+               "el color dice si el cliente paga o recibe fija.")
+
+    df = _con_cortos(_base_clasificada(f, ("TASAS",)))
+    if df.empty:
+        st.info("Sin operaciones de tasa para estos filtros."); return
+
+    c = st.columns(4)
+    c[0].metric("Operaciones", f"{len(df):,}")
+    c[1].metric("Nocional (MM$)", f"{a_mm(df.nocional_m.fillna(0)).sum():,.0f}")
+    c[2].metric("Instrumentos", f"{df.instrumento.nunique()}")
+    c[3].metric("Contrapartes", f"{df.contraparte_grupo.nunique()}")
+
+    instrumentos = sorted(df.instrumento.dropna().unique())
+    sel = st.multiselect("Instrumento", instrumentos, default=instrumentos)
+    d = df[df.instrumento.isin(sel)] if sel else df
+
+    curva = d[d.tenor_anios.notna() & d.tasa_fija.notna() & (d.tenor_anios > 0)]
+    if curva.empty:
+        st.warning("Ninguna operacion tiene tenor y tasa fija informados a la vez.")
+    else:
+        color_por = st.radio("Colorear por", ["Direccion", "Contraparte", "Instrumento"],
+                             horizontal=True)
+        col = {"Direccion": "direccion", "Contraparte": "contraparte_grupo",
+               "Instrumento": "instrumento"}[color_por]
+        curva = curva.assign(nocional_mm=a_mm(curva.nocional_m.fillna(0)).abs())
+        fig = px.scatter(
+            curva, x="tenor_anios", y="tasa_fija", color=col,
+            size=curva.nocional_mm + 1, size_max=26, opacity=0.8,
+            color_discrete_map={"Paga Fija": "#c62828", "Recibe Fija": "#2e7d32",
+                                "Fija contra Fija": "#1565c0",
+                                "Flotante contra Flotante": "#f9a825",
+                                "Sin determinar": "#9e9e9e"},
+            labels={"tenor_anios": "Tenor (anios)", "tasa_fija": "Tasa fija (%)",
+                    col: color_por},
+            hover_data={
+                "folio_operacion": True, "item_operacion": True, "aseguradora": True,
+                "contraparte_grupo": True, "contraparte_nombre": True,
+                "instrumento": True, "indice_flotante": True, "direccion": True,
+                "moneda_recibe": True, "moneda_entrega": True,
+                "periodo_informacion": True, "fecha_operacion": True,
+                "fecha_vencimiento": True, "tenor_anios": ":.2f",
+                "tasa_fija": ":.4f", "tasa_precio_mercado": ":.4f",
+                "spread_patas_pb": ":.1f", "nocional_mm": ":,.0f",
+                "mtm_neto_m": ":,.0f", "clasificacion_riesgo": True,
+                "nocional_m": False,
+            })
+        fig.update_layout(height=580, margin=dict(l=8, r=8, t=30, b=8),
+                          legend=dict(orientation="h", y=-0.18))
+        fig.update_xaxes(tickformat=",.1f")
+        fig.update_yaxes(tickformat=".2f", title_text="Tasa fija (%)")
+        st.plotly_chart(fig, width="stretch", key="vista_tasas_g6")
+        st.caption(f"{len(curva):,} operaciones en la curva. El tamano del punto es el "
+                   f"nocional en MM$.")
+
+    st.markdown("**Direccionalidad por contraparte**")
+    piv = (d.assign(noc=a_mm(d.nocional_m.fillna(0)))
+             .pivot_table(index="contraparte_grupo", columns="direccion",
+                          values="noc", aggfunc="sum", fill_value=0))
+    if not piv.empty:
+        # Ordena por exposicion total del banco, no por una direccion en
+        # particular: cual existe depende de los filtros.
+        piv = piv.loc[piv.sum(axis=1).sort_values(ascending=False).index]
+    st.dataframe(piv.round(0), width="stretch", column_config=tabla_miles(piv))
+
+    with st.expander("Detalle de operaciones"):
+        cols = ["periodo_informacion", "aseguradora", "contraparte_grupo", "instrumento",
+                "direccion", "indice_flotante", "tenor_anios", "tasa_fija",
+                "tasa_precio_mercado", "spread_patas_pb", "nocional_m", "mtm_neto_m",
+                "folio_operacion", "fecha_vencimiento"]
+        det = d[[c for c in cols if c in d.columns]].copy()
+        det["nocional_m"] = a_mm(det.nocional_m)
+        det = det.rename(columns={"nocional_m": "nocional_mm", "periodo_informacion": "periodo"})
+        st.dataframe(det.sort_values("nocional_mm", ascending=False),
+                     width="stretch", hide_index=True, column_config=tabla_miles(det))
+
+
+def vista_fx_ccs(f: dict) -> None:
+    st.subheader("FX y Cross Currency — Mapa de monedas")
+    st.caption("Quien entrega que moneda y recibe cual. En un CCS la posicion larga "
+               "es la que la compania recibe; la corta, la que entrega.")
+
+    df = _con_cortos(_base_clasificada(f, ("FX / CCS",)))
+    if df.empty:
+        st.info("Sin operaciones de FX o CCS para estos filtros."); return
+
+    c = st.columns(4)
+    c[0].metric("Operaciones", f"{len(df):,}")
+    c[1].metric("Nocional (MM$)", f"{a_mm(df.nocional_m.fillna(0)).sum():,.0f}")
+    c[2].metric("Cruces distintos", f"{df.cruce_monedas.nunique()}")
+    c[3].metric("Contrapartes", f"{df.contraparte_grupo.nunique()}")
+
+    instrumentos = sorted(df.instrumento.dropna().unique())
+    sel = st.multiselect("Instrumento", instrumentos, default=instrumentos)
+    d = df[df.instrumento.isin(sel)] if sel else df
+
+    # --- Sankey de flujos de moneda -----------------------------------------
+    st.markdown("**Flujo de monedas** — entrega (izquierda) hacia recibe (derecha)")
+    flujo = (d[d.moneda_entrega.notna() & d.moneda_recibe.notna()]
+             .assign(noc=lambda x: a_mm(x.nocional_m.fillna(0)).abs())
+             .groupby(["moneda_entrega", "moneda_recibe"], as_index=False)
+             .agg(nocional_mm=("noc", "sum"), ops=("folio_operacion", "count")))
+    if flujo.empty:
+        st.info("Ninguna operacion tiene las dos monedas informadas.")
+    else:
+        entrega = [f"{m} ▸" for m in sorted(flujo.moneda_entrega.unique())]
+        recibe = [f"▸ {m}" for m in sorted(flujo.moneda_recibe.unique())]
+        nodos = entrega + recibe
+        idx = {n: i for i, n in enumerate(nodos)}
+        fig = go.Figure(go.Sankey(
+            node=dict(label=nodos, pad=18, thickness=16,
+                      line=dict(color="rgba(0,0,0,.25)", width=0.5),
+                      color=["#1565c0"] * len(entrega) + ["#2e7d32"] * len(recibe)),
+            link=dict(
+                source=[idx[f"{r.moneda_entrega} ▸"] for r in flujo.itertuples()],
+                target=[idx[f"▸ {r.moneda_recibe}"] for r in flujo.itertuples()],
+                value=[float(r.nocional_mm) for r in flujo.itertuples()],
+                customdata=[[r.moneda_entrega, r.moneda_recibe, r.ops]
+                            for r in flujo.itertuples()],
+                hovertemplate=("Entrega %{customdata[0]} y recibe %{customdata[1]}<br>"
+                               "%{value:,.0f} MM$ en %{customdata[2]:,} operaciones"
+                               "<extra></extra>"),
+                color="rgba(21,101,192,.28)")))
+        fig.update_layout(height=460, margin=dict(l=8, r=8, t=24, b=8),
+                          font=dict(size=13))
+        st.plotly_chart(fig, width="stretch", key="vista_fx_ccs_g7")
+        st.caption("El ancho es nocional en MM$. Un flujo grueso hacia la derecha en "
+                   "USD significa demanda neta de dolares de la plaza aseguradora.")
+
+    c1, c2 = st.columns(2)
+    porcruce = (d.assign(noc=a_mm(d.nocional_m.fillna(0)))
+                  .groupby("instrumento", as_index=False)
+                  .agg(nocional_mm=("noc", "sum"), ops=("folio_operacion", "count"))
+                  .sort_values("nocional_mm", ascending=False))
+    fig2 = px.bar(porcruce, x="instrumento", y="nocional_mm", text_auto=",.0f",
+                  labels={"instrumento": "", "nocional_mm": "Nocional (MM$)"})
+    eje_mm(fig2.update_layout(height=380, margin=dict(t=28)))
+    c1.plotly_chart(fig2, width="stretch", key="fxccs_por_instrumento")
+
+    porbanco = (d.assign(noc=a_mm(d.nocional_m.fillna(0)))
+                  .groupby(["contraparte_grupo", "instrumento"], as_index=False)
+                  .agg(nocional_mm=("noc", "sum")))
+    fig3 = px.bar(porbanco, x="contraparte_grupo", y="nocional_mm", color="instrumento",
+                  barmode="stack", labels={"contraparte_grupo": "",
+                                           "nocional_mm": "Nocional (MM$)"})
+    eje_mm(fig3.update_layout(height=380, margin=dict(t=28),
+                              legend=dict(orientation="h", y=-0.35)))
+    c2.plotly_chart(fig3, width="stretch", key="fxccs_por_banco")
+
+    with st.expander("Detalle de operaciones"):
+        cols = ["periodo_informacion", "aseguradora", "contraparte_grupo", "instrumento",
+                "cruce_monedas", "moneda_entrega", "moneda_recibe", "tenor_anios",
+                "tipo_cambio_contrato", "tipo_cambio_mercado", "nocional_m",
+                "mtm_neto_m", "folio_operacion", "fecha_vencimiento"]
+        det = d[[c for c in cols if c in d.columns]].copy()
+        det["nocional_m"] = a_mm(det.nocional_m)
+        det = det.rename(columns={"nocional_m": "nocional_mm",
+                                  "periodo_informacion": "periodo"})
+        st.dataframe(det.sort_values("nocional_mm", ascending=False),
+                     width="stretch", hide_index=True, column_config=tabla_miles(det))
+
+
+def vista_renta_fija(f: dict) -> None:
+    st.subheader("Renta Fija — local y extranjera")
+    st.caption("Segmentada por emisor: soberano, bancario, corporativo e hipotecario. "
+               "La duracion del libro extranjero viene informada; la del local es "
+               "aproximada, porque el anexo B.1 no la pide.")
+
+    pers = ", ".join(str(p) for p in f["periodos"]) or "0"
+    ruts = f.get("companias") or []
+    filtro_rut = (f"AND d.rut_compania IN ({', '.join(str(r) for r in ruts)})"
+                  if ruts and len(ruts) < len(f.get("_companias_all", [])) else "")
+    df = q(f"""
+        SELECT d.*, {nombre_compania_sql()} AS aseguradora_nombre
+        FROM v_renta_fija_clasificada d {JOIN_COMP}
+        WHERE d.periodo_informacion IN ({pers}) {filtro_rut}
+    """)
+    if df.empty:
+        st.info("Sin renta fija para estos filtros."); return
+    df = _con_cortos(df)
+
+    c1, c2, c3 = st.columns(3)
+    ambitos = sorted(df.ambito.unique())
+    amb = c1.multiselect("Ambito", ambitos, default=ambitos)
+    segs = sorted(df.segmento_emisor.unique())
+    seg = c2.multiselect("Segmento de emisor", segs, default=segs)
+    mons = sorted(df.moneda.dropna().unique())
+    mon = c3.multiselect("Moneda", mons, default=mons)
+    d = df[df.ambito.isin(amb) & df.segmento_emisor.isin(seg) & df.moneda.isin(mon)]
+    if d.empty:
+        st.info("Sin papeles con esa combinacion."); return
+
+    k = st.columns(4)
+    k[0].metric("Papeles", f"{len(d):,}")
+    k[1].metric("Valor final (MM$)", f"{a_mm(d.valor_final.fillna(0)).sum():,.0f}")
+    k[2].metric("Duracion media", f"{d.duracion.mean():,.1f}")
+    k[3].metric("TIR mercado media", f"{d.tir_mercado.mean():,.2f}%")
+
+    resumen = (d.assign(v=a_mm(d.valor_final.fillna(0)))
+                 .groupby(["ambito", "segmento_emisor"], as_index=False)
+                 .agg(papeles=("instrumento_id", "count"), valor_mm=("v", "sum"),
+                      duracion=("duracion", "mean"), tir=("tir_mercado", "mean")))
+    fig = px.bar(resumen, x="segmento_emisor", y="valor_mm", color="ambito",
+                 barmode="group", text_auto=",.0f",
+                 labels={"segmento_emisor": "", "valor_mm": "Valor final (MM$)"})
+    eje_mm(fig.update_layout(height=400, margin=dict(t=28)), titulo="Valor final (MM$)")
+    st.plotly_chart(fig, width="stretch", key="vista_renta_fija_g8")
+
+    st.markdown("**Duracion contra TIR** — el tamano es el valor del papel")
+    disp = d[d.duracion.notna() & d.tir_mercado.notna()].copy()
+    if not disp.empty:
+        disp["valor_mm"] = a_mm(disp.valor_final.fillna(0)).abs()
+        fig2 = px.scatter(
+            disp, x="duracion", y="tir_mercado", color="segmento_emisor",
+            symbol="ambito", size=disp.valor_mm + 1, size_max=24, opacity=0.75,
+            labels={"duracion": "Duracion (anios)", "tir_mercado": "TIR de mercado (%)"},
+            hover_data={"instrumento_id": True, "aseguradora": True,
+                        "emisor_nombre": True, "tipo_instrumento": True,
+                        "moneda": True, "clasificacion_riesgo": True,
+                        "fecha_vencimiento": True, "tir_compra": ":.3f",
+                        "tir_mercado": ":.3f", "duracion": ":.2f",
+                        "duracion_origen": True, "valor_mm": ":,.0f",
+                        "valor_final": False, "en_margen_o_pacto": True})
+        fig2.update_layout(height=520, margin=dict(t=28),
+                           legend=dict(orientation="h", y=-0.2))
+        fig2.update_yaxes(tickformat=".2f")
+        st.plotly_chart(fig2, width="stretch", key="vista_renta_fija_g9")
+
+    st.dataframe(resumen.round(2), width="stretch", hide_index=True,
+                 column_config=tabla_miles(resumen))
+
+    with st.expander("Detalle de papeles"):
+        cols = ["periodo_informacion", "aseguradora", "ambito", "segmento_emisor",
+                "tipo_instrumento", "instrumento_id", "emisor_nombre", "moneda",
+                "valor_final", "tir_compra", "tir_mercado", "duracion",
+                "duracion_origen", "clasificacion_riesgo", "fecha_vencimiento"]
+        det = d[[c for c in cols if c in d.columns]].copy()
+        det["valor_final"] = a_mm(det.valor_final)
+        det = det.rename(columns={"valor_final": "valor_mm",
+                                  "periodo_informacion": "periodo"})
+        st.dataframe(det.sort_values("valor_mm", ascending=False).head(5000),
+                     width="stretch", hide_index=True, column_config=tabla_miles(det))
+        st.download_button("Descargar renta fija (CSV)",
+                           det.to_csv(index=False).encode("utf-8"),
+                           "renta_fija.csv", "text/csv")
+
+
+# ---------------------------------------------------------------------------
+#  copiloto
+# ---------------------------------------------------------------------------
+
+#: Tablas y vistas que el copiloto puede consultar. Lista blanca explicita:
+#: el dia que se conecte un LLM, lo que genere queda acotado a esto.
+COPILOTO_TABLAS = ("v_derivado_clasificado", "v_renta_fija_clasificada",
+                   "fact_derivado", "fact_renta_fija", "fact_extranjero_rf",
+                   "fact_garantia", "fact_flujo", "dim_compania", "dim_contraparte")
+
+
+def _sql_seguro(sql: str) -> tuple[bool, str]:
+    """Deja pasar solo lecturas sobre la lista blanca.
+
+    El copiloto va a terminar ejecutando SQL que escribio un modelo. La
+    conexion ya es de solo lectura, pero la validacion no sobra: un SELECT
+    sobre una tabla que no es del warehouse tampoco deberia correr.
+    """
+    limpio = " ".join(sql.strip().rstrip(";").split())
+    if not limpio.lower().startswith(("select", "with")):
+        return False, "Solo se permiten consultas SELECT."
+    prohibido = ("insert", "update", "delete", "drop", "create", "alter", "attach",
+                 "copy", "install", "load", "pragma", "export")
+    for p in prohibido:
+        if re.search(rf"\b{p}\b", limpio, re.I):
+            return False, f"La consulta contiene '{p}', que no esta permitido."
+    return True, limpio
+
+
+def _responder(pregunta: str, f: dict) -> tuple[str, str | None]:
+    """Motor de respuestas del copiloto.
+
+    Hoy es determinista: reconoce un puñado de intenciones y arma el SQL. Es
+    a proposito -- un mock que invente numeros seria peor que no tener nada.
+    Cuando se conecte un LLM, reemplaza a esta funcion y el resto del flujo
+    (lista blanca, ejecucion, render) queda igual.
+    """
+    p = pregunta.lower()
+    per = f["periodo_foco"]
+
+    if any(k in p for k in ("vencimiento", "vence", "roll", "maduran")):
+        return ("Vencimientos de derivados en los proximos 6 meses, por contraparte.",
+                f"""SELECT contraparte_grupo AS banco, COUNT(*) AS operaciones,
+       ROUND(SUM(nocional_m)/1000, 0) AS nocional_mm
+FROM v_derivado_clasificado
+WHERE periodo_informacion = {per}
+  AND fecha_vencimiento BETWEEN LAST_DAY(STRPTIME('{per}' || '01','%Y%m%d'))
+      AND LAST_DAY(STRPTIME('{per}' || '01','%Y%m%d')) + INTERVAL 6 MONTH
+GROUP BY 1 ORDER BY nocional_mm DESC""")
+
+    if any(k in p for k in ("ccs", "cross currency", "moneda", "dolar", "usd")):
+        return ("Cross currency swaps por cruce de monedas.",
+                f"""SELECT instrumento, moneda_entrega, moneda_recibe,
+       COUNT(*) AS operaciones, ROUND(SUM(nocional_m)/1000, 0) AS nocional_mm
+FROM v_derivado_clasificado
+WHERE periodo_informacion = {per} AND clase_activo = 'FX / CCS'
+GROUP BY 1,2,3 ORDER BY nocional_mm DESC LIMIT 20""")
+
+    if any(k in p for k in ("pacto", "repo", "fondeo", "financia")):
+        return ("Pactos por contraparte: a que tasa se fondea la plaza.",
+                f"""SELECT contraparte_grupo AS banco, COUNT(*) AS operaciones,
+       ROUND(MEDIAN(tasa_pacto), 3) AS tasa_mediana,
+       ROUND(SUM(nocional_m)/1000, 0) AS nocional_mm
+FROM v_derivado_clasificado
+WHERE periodo_informacion = {per} AND clase_activo = 'FINANCIAMIENTO'
+GROUP BY 1 ORDER BY nocional_mm DESC""")
+
+    if any(k in p for k in ("irs", "tasa", "curva", "camara")):
+        return ("IRS por indice y direccion.",
+                f"""SELECT instrumento, direccion, COUNT(*) AS operaciones,
+       ROUND(AVG(tasa_fija), 3) AS tasa_fija_media,
+       ROUND(AVG(tenor_anios), 2) AS tenor_medio,
+       ROUND(SUM(nocional_m)/1000, 0) AS nocional_mm
+FROM v_derivado_clasificado
+WHERE periodo_informacion = {per} AND clase_activo = 'TASAS'
+GROUP BY 1,2 ORDER BY nocional_mm DESC""")
+
+    if any(k in p for k in ("bono", "renta fija", "duracion", "tir", "soberano")):
+        return ("Renta fija por ambito y segmento de emisor.",
+                f"""SELECT ambito, segmento_emisor, moneda, COUNT(*) AS papeles,
+       ROUND(SUM(valor_final)/1000, 0) AS valor_mm,
+       ROUND(AVG(duracion), 2) AS duracion, ROUND(AVG(tir_mercado), 2) AS tir
+FROM v_renta_fija_clasificada
+WHERE periodo_informacion = {per}
+GROUP BY 1,2,3 ORDER BY valor_mm DESC LIMIT 25""")
+
+    if any(k in p for k in ("contraparte", "banco", "competencia", "quien")):
+        return ("Ranking de contrapartes por nocional.",
+                f"""SELECT contraparte_grupo AS banco, clase_activo,
+       COUNT(*) AS operaciones, ROUND(SUM(nocional_m)/1000, 0) AS nocional_mm,
+       COUNT(DISTINCT rut_compania) AS clientes
+FROM v_derivado_clasificado
+WHERE periodo_informacion = {per}
+GROUP BY 1,2 ORDER BY nocional_mm DESC LIMIT 25""")
+
+    return ("No reconoci la pregunta. Probá con: vencimientos, CCS, IRS, bonos, "
+            "pactos o contrapartes. Tambien podés pegar SQL directamente, "
+            "empezando con SELECT.", None)
+
+
+def vista_copiloto(f: dict) -> None:
+    st.subheader("Copiloto de la Mesa")
+    st.info("**Estructura base.** El motor de respuestas es determinista: reconoce "
+            "intenciones y arma el SQL, que se muestra siempre antes del resultado. "
+            "No inventa numeros. Cuando se conecte un LLM reemplaza a `_responder()` "
+            "y el resto del flujo -- lista blanca, ejecucion y render -- no cambia.")
+
+    if "chat" not in st.session_state:
+        st.session_state.chat = [
+            {"rol": "assistant",
+             "texto": "Preguntame por vencimientos, CCS, IRS, bonos, pactos o "
+                      "contrapartes. Tambien acepto SQL directo si empieza con SELECT."}
+        ]
+    for m in st.session_state.chat:
+        with st.chat_message(m["rol"]):
+            st.markdown(m["texto"])
+            if m.get("sql"):
+                st.code(m["sql"], language="sql")
+            if m.get("df") is not None and not m["df"].empty:
+                st.dataframe(m["df"], width="stretch", hide_index=True,
+                             column_config=tabla_miles(m["df"]))
+
+    pregunta = st.chat_input("Ej: que vence en los proximos 6 meses con Santander")
+    if not pregunta:
+        return
+
+    st.session_state.chat.append({"rol": "user", "texto": pregunta})
+    if pregunta.strip().lower().startswith(("select", "with")):
+        texto, sql = "Ejecuto el SQL que me pasaste.", pregunta
+    else:
+        texto, sql = _responder(pregunta, f)
+
+    df = None
+    if sql:
+        ok, limpio = _sql_seguro(sql)
+        if not ok:
+            texto, sql = f"No puedo ejecutar eso: {limpio}", None
+        else:
+            try:
+                df = q(limpio)
+            except Exception as e:                     # noqa: BLE001
+                texto = f"La consulta fallo: `{e}`"
+                df = None
+    st.session_state.chat.append({"rol": "assistant", "texto": texto, "sql": sql, "df": df})
+    st.rerun()
 
 
 def vista_explorador(f: dict) -> None:
@@ -1112,7 +1639,9 @@ def vista_explorador(f: dict) -> None:
                "por texto y por anio. Todas las columnas del warehouse, crudas y calculadas.")
 
     TABLAS = {
-        "Derivados": "fact_derivado",
+        "Derivados (clasificados)": "v_derivado_clasificado",
+        "Renta fija (clasificada)": "v_renta_fija_clasificada",
+        "Derivados (crudo)": "fact_derivado",
         "Renta fija local (B.1)": "fact_renta_fija",
         "Renta fija EXTRANJERA (B.5)": "fact_extranjero_rf",
         "Renta variable extranjera (B.5)": "fact_extranjero_rv",
@@ -1194,18 +1723,45 @@ def vista_explorador(f: dict) -> None:
     if df.empty:
         st.info("Sin filas para esos filtros."); return
 
+    # Columnas de plomeria del ETL: sirven para auditar, no para operar. Se
+    # esconden por defecto y se pueden traer de vuelta con un check.
+    ETL = {"zip_origen", "fecha_descarga", "source_file", "line_no", "record_type",
+           "periodo", "resolucion_nota", "resolucion_confianza", "nocional_origen",
+           "tasa_precio_origen", "veredicto", "duracion_origen"}
+
+    #: Orden con el que la mesa lee una fila: cuando, quien, con quien, que,
+    #: cuanto, a que precio y hasta cuando.
+    ORDEN = ["periodo_informacion", "aseguradora_nombre", "aseguradora",
+             "rut_compania", "contraparte_grupo", "contraparte_nombre",
+             "contraparte_key", "clase_activo", "instrumento", "producto", "subtipo",
+             "segmento_emisor", "ambito", "tipo_instrumento", "instrumento_id",
+             "nemotecnico", "isin", "emisor_nombre", "folio_operacion",
+             "item_operacion", "direccion", "rol_tasa_fija", "indice_flotante",
+             "moneda", "moneda_entrega", "moneda_recibe", "cruce_monedas",
+             "nocional_m", "valor_final", "mtm_neto_m", "mtm_activo_m",
+             "mtm_pasivo_m", "tasa_fija", "tasa_precio_contrato",
+             "tasa_precio_mercado", "spread_patas_pb", "tir_compra", "tir_mercado",
+             "duracion", "tenor_anios", "plazo_dias", "fecha_operacion",
+             "fecha_vencimiento", "clasificacion_riesgo"]
+
+    def _ordenar(cs):
+        conocidas = [c for c in ORDEN if c in cs]
+        return conocidas + sorted(c for c in cs if c not in conocidas)
+
     with st.expander("Elegir columnas", expanded=False):
-        pre = st.radio("Preajuste", ["Todas", "Comerciales", "Numericas"], horizontal=True)
-        if pre == "Comerciales":
-            pref = [c for c in df.columns if any(k in c for k in (
-                "aseguradora", "contraparte", "producto", "subtipo", "nemotecnico", "folio",
-                "moneda", "nocional", "mtm", "tasa", "tir", "fecha", "plazo", "clasificacion",
-                "valor_final", "duracion", "rol_tasa"))]
-        elif pre == "Numericas":
-            pref = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
+        c1, c2 = st.columns([1, 2])
+        ver_etl = c1.checkbox("Ver columnas de ETL", value=False,
+                              help="zip de origen, archivo, linea, veredicto: "
+                                   "sirven para auditar una fila, no para operar.")
+        pre = c2.radio("Preajuste", ["Operativas", "Todas", "Numericas"], horizontal=True)
+        disponibles = _ordenar([c for c in df.columns if ver_etl or c not in ETL])
+        if pre == "Numericas":
+            pref = [c for c in disponibles if pd.api.types.is_numeric_dtype(df[c])]
+        elif pre == "Operativas":
+            pref = [c for c in disponibles if c in ORDEN] or disponibles
         else:
-            pref = list(df.columns)
-        cols = st.multiselect("Columnas", list(df.columns), default=pref or list(df.columns))
+            pref = disponibles
+        cols = st.multiselect("Columnas", disponibles, default=pref or disponibles)
 
     vista = df[cols] if cols else df
     orden = st.selectbox("Ordenar por", ["(sin orden)"] + list(vista.columns))
@@ -1213,7 +1769,8 @@ def vista_explorador(f: dict) -> None:
         asc = st.checkbox("Ascendente", value=False)
         vista = vista.sort_values(orden, ascending=asc, na_position="last")
 
-    st.dataframe(vista, width="stretch", hide_index=True, height=560)
+    st.dataframe(vista, width="stretch", hide_index=True, height=560,
+                 column_config=tabla_miles(vista))
     st.download_button("Descargar CSV", vista.to_csv(index=False).encode("utf-8"),
                        f"cmf1835_{tabla}.csv", "text/csv")
     with st.expander("SQL ejecutado"):
@@ -1251,22 +1808,39 @@ def main() -> None:
     k = st.columns(6)
     k[0].metric("Operaciones", f"{int(kpi.ops[0]):,}")
     k[1].metric("Folios", f"{int(kpi.folios[0]):,}")
-    k[2].metric("Nocional (M$)", f"{float(kpi.nocional[0] or 0):,.0f}")
-    k[3].metric("MTM neto (M$)", f"{float(kpi.mtm[0] or 0):,.0f}")
+    k[2].metric("Nocional (MM$)", f"{float(kpi.nocional[0] or 0) / M_A_MM:,.0f}")
+    k[3].metric("MTM neto (MM$)", f"{float(kpi.mtm[0] or 0) / M_A_MM:,.0f}")
     k[4].metric("Grupos contraparte", f"{int(kpi.grupos[0] or 0):,}")
     k[5].metric("Aseguradoras", f"{int(kpi.cias[0] or 0):,}")
 
-    tabs = st.tabs([
-        "Oportunidades", "Whitespace 2.0", "Whitespace Map", "Roll-Off Calendar",
-        "Price Discovery", "Flujos mensuales", "Garantias", "Explorador libre"])
-    with tabs[0]: vista_oportunidades(f)
-    with tabs[1]: vista_whitespace2(f)
-    with tabs[2]: vista_whitespace(f)
-    with tabs[3]: vista_rolloff(f)
-    with tabs[4]: vista_price_discovery(f)
-    with tabs[5]: vista_flujos(f)
-    with tabs[6]: vista_garantias(f)
-    with tabs[7]: vista_explorador(f)
+    seccion = st.radio(
+        "Seccion", ["Mercado por clase de activo", "Oportunidades comerciales",
+                    "Flujos y garantias", "Explorador y copiloto"],
+        horizontal=True, label_visibility="collapsed")
+
+    if seccion == "Mercado por clase de activo":
+        t = st.tabs(["Tasas", "FX / CCS", "Renta Fija", "Price Discovery (todo)"])
+        with t[0]: vista_tasas(f)
+        with t[1]: vista_fx_ccs(f)
+        with t[2]: vista_renta_fija(f)
+        with t[3]: vista_price_discovery(f)
+
+    elif seccion == "Oportunidades comerciales":
+        t = st.tabs(["Opportunity Finder", "Whitespace 2.0", "Whitespace Map"])
+        with t[0]: vista_oportunidades(f)
+        with t[1]: vista_whitespace2(f)
+        with t[2]: vista_whitespace(f)
+
+    elif seccion == "Flujos y garantias":
+        t = st.tabs(["Roll-Off Calendar", "Flujos mensuales", "Garantias"])
+        with t[0]: vista_rolloff(f)
+        with t[1]: vista_flujos(f)
+        with t[2]: vista_garantias(f)
+
+    else:
+        t = st.tabs(["Explorador libre", "Copiloto de la Mesa"])
+        with t[0]: vista_explorador(f)
+        with t[1]: vista_copiloto(f)
 
 
 if __name__ == "__main__":
