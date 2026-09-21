@@ -681,7 +681,7 @@ class RowBuilder:
             "moneda": _txt(f.get("UNIDAD_MONETARIA")),
             "valor_costo": _num(f.get("VALOR_COSTO_ACTUALIZADO")),
             "depreciacion": _num(f.get("DEPRECIACION_ACUMULADA")),
-            "valor_razonable": _num(f.get("VALOR RAZONABLE")),
+            "valor_razonable": _num(f.get("VALOR_RAZONABLE")),
             "deterioro": _num(f.get("DETERIORO")),
             "valor_final": _num(f.get("VALOR_FINAL")),
             "clasificacion_riesgo": _txt(f.get("CLASIFICACION_DE_RIESGO")),
@@ -769,6 +769,15 @@ class RowBuilder:
 class Loader:
     """Recorre los ZIP y escribe Parquet particionado por periodo."""
 
+    #: Letras que el loader despacha a una tabla. El resto se salta a
+    #: proposito y la auditoria de fidelidad las cuenta aparte.
+    LETRAS_CARGADAS = frozenset({"I", "P", "G", "A", "F", "X", "O", "C"})
+
+    #: Tipos de registro que llevan detalle, por letra. Lo demas es cabecera
+    #: o trailer.
+    DETALLE = {"I": {"2"}, "P": {"2", "3", "4", "5", "6"}, "G": {"2"},
+               "A": {"2"}, "F": {"2"}, "X": {"2", "3"}, "O": {"2"}, "C": {"2"}}
+
     HECHOS = ("fact_derivado", "fact_renta_fija", "fact_garantia", "fact_cuarentena",
               "fact_equity", "fact_fondo", "fact_extranjero_rf", "fact_extranjero_rv",
               "fact_otras_inv", "fact_control", "dim_compania_src")
@@ -796,7 +805,7 @@ class Loader:
                     spec, _rut, _per = self.engine.describe(base)
                 except UnknownFileTypeError:
                     continue
-                if spec.letter not in ("I", "P", "G", "A", "F", "X", "O", "C"):
+                if spec.letter not in self.LETRAS_CARGADAS:
                     continue
                 for rec in self.engine.parse_file(base, data=z.read(info)):
                     # La generacion vieja (pre 202412) tiene otro largo de
