@@ -45,8 +45,12 @@ SALIDA = ROOT / "warehouse" / "sample" / "cmf1835_sample.duckdb"
 HECHOS = {
     "fact_derivado": "periodo_informacion",
     "fact_renta_fija": "periodo_informacion",
+    "fact_extranjero_rf": "periodo_informacion",
+    "fact_extranjero_rv": "periodo_informacion",
     "fact_equity": "periodo_informacion",
     "fact_fondo": "periodo_informacion",
+    "fact_otras_inv": "periodo_informacion",
+    "fact_control": "periodo_informacion",
     "fact_garantia": "periodo_informacion",
     "fact_cuarentena": "periodo_informacion",
     "fact_flujo": "periodo",

@@ -1112,9 +1112,16 @@ def vista_explorador(f: dict) -> None:
                "por texto y por anio. Todas las columnas del warehouse, crudas y calculadas.")
 
     TABLAS = {
-        "Derivados": "fact_derivado", "Renta fija": "fact_renta_fija",
-        "Equity y fondos de inversion": "fact_equity", "Fondos mutuos": "fact_fondo",
-        "Garantias": "fact_garantia", "Flujos": "fact_flujo",
+        "Derivados": "fact_derivado",
+        "Renta fija local (B.1)": "fact_renta_fija",
+        "Renta fija EXTRANJERA (B.5)": "fact_extranjero_rf",
+        "Renta variable extranjera (B.5)": "fact_extranjero_rv",
+        "Equity y fondos de inversion (B.2)": "fact_equity",
+        "Fondos mutuos (B.3)": "fact_fondo",
+        "Otras inversiones (B.6)": "fact_otras_inv",
+        "Control / totales (B.8)": "fact_control",
+        "Garantias (B.14)": "fact_garantia",
+        "Flujos": "fact_flujo",
         "Cuarentena": "fact_cuarentena",
     }
     c1, c2, c3 = st.columns([2, 2, 1])
@@ -1144,7 +1151,8 @@ def vista_explorador(f: dict) -> None:
         extra = predicados_garantia(f)
     else:
         extra = where(partes)
-    if tabla in ("fact_equity", "fact_fondo"):
+    if tabla in ("fact_equity", "fact_fondo", "fact_extranjero_rf",
+                 "fact_extranjero_rv", "fact_otras_inv", "fact_control"):
         extra = where(partes + [cl_in(tabla, "rut_compania", f.get("companias"),
                                       f.get("_companias_all"))])
 
@@ -1172,7 +1180,8 @@ def vista_explorador(f: dict) -> None:
                 AS razon_vigente_nominal,
             d.tir_mercado - d.tir_compra AS delta_tir"""
         join = JOIN_COMP
-    elif tabla in ("fact_equity", "fact_fondo", "fact_garantia"):
+    elif tabla in ("fact_equity", "fact_fondo", "fact_garantia", "fact_extranjero_rf",
+                   "fact_extranjero_rv", "fact_otras_inv", "fact_control"):
         calc = f", {nombre_compania_sql()} AS aseguradora_nombre"
         join = JOIN_COMP
     else:

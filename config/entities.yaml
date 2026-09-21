@@ -70,7 +70,18 @@ entities:
 
   # --- Grupo BBVA ------------------------------------------------------------
   - {key: BBVA,    name: "Grupo BBVA", kind: banco, country: ES}
-  - {key: BBVA_CL, name: "Banco BBVA Chile", parent: BBVA, kind: banco, country: CL,
+  # OJO: NO cuelga de BBVA. Banco BBVA Chile (RUT 97032000) se vendio a
+  # Scotiabank en 2018 y la evidencia esta en los propios datos: ninguna
+  # operacion contra este RUT tiene fecha posterior al 2018-07-25, justo
+  # cuando cerro la compra. Son 182 registros de posiciones en runoff de
+  # cinco aseguradoras.
+  #
+  # Agruparlo bajo BBVA inflaba la exposicion propia y escondia whitespace
+  # real: el dashboard mostraba "Con BBVA" en pares cliente-producto donde
+  # lo unico vivo es un swap de 2017 con una entidad que ya no es del grupo.
+  # Se detecto cuadrando el libro de BBVA NY contra lo que Confuturo informa.
+  - {key: BBVA_CL_LEGACY, name: "Banco BBVA Chile (runoff, vendido a Scotiabank 2018)",
+     kind: banco, country: CL,
      ruts: [97032000], aliases: [BANCO BBVA CHILE, BBVA CHILE]}
   # "BBVA ESPA#A" y "BBVA ESPA A" son la misma entidad: tres informantes
   # escriben la enie de tres formas distintas en los bytes del archivo.

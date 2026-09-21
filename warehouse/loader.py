@@ -571,6 +571,151 @@ class RowBuilder:
         })
         return row
 
+    def extranjero_rf(self, rec: ParsedRecord, zip_origen: str, descargado: str,
+                      veredicto: Any) -> dict[str, Any]:
+        """Renta fija EXTRANJERA (B.5 tipo 2).
+
+        Este es el libro que explica los cross currency swaps: la aseguradora
+        calza en UF y compra bonos en dolares y euros, asi que cubre el riesgo
+        de moneda con CCS. Sin este anexo se ve la cobertura y no lo cubierto.
+
+        A diferencia de B.1, aca la DURACION viene informada por la compania;
+        no hay que aproximarla. Y `activo_en_margen_o_sujeto_a_pacto` dice si
+        el papel esta entregado en un repo, que es justo lo que cruza contra
+        el colateral de los pactos.
+        """
+        f = rec.fields
+        row = self._base(rec, zip_origen, descargado)
+        row.update({
+            "folio_operacion": _txt(f.get("FOLIO_OPERACION")),
+            "item_operacion": _txt(f.get("ITEM_OPERACION")),
+            "tipo_instrumento": _txt(f.get("TIPO_INSTRUMENTO")),
+            "emisor": _txt(f.get("NOMBRE_DEL_EMISOR")),
+            "isin": _txt(f.get("CODIGO_INDIVIDUALIZACION_O_NEMOTECNICO")),
+            "pais": _txt(f.get("PAIS")),
+            "pais_matriz": _txt(f.get("PAIS_MATRIZ")),
+            "estado_garante": _txt(f.get("ESTADO_GARANTE")),
+            "moneda": _txt(f.get("MONEDA")),
+            "valor_nominal": _num(f.get("VALOR_NOMINAL")),
+            "valor_compra": _num(f.get("VALOR_COMPRA")),
+            "valor_razonable": _num(f.get("VALOR_RAZONABLE")),
+            "valor_final": _num(f.get("VALOR_FINAL")),
+            "deterioro": _num(f.get("DETERIORO")),
+            "valor_presente_tir_compra": _num(f.get("VALOR_PRESENTE_TIR_DE_COMPRA")),
+            "tir_compra": _num(f.get("TIR_DE_COMPRA")),
+            "tir_mercado": _num(f.get("TIR_MERCADO")),
+            "tasa_emision": _num(f.get("TASA_EMISION")),
+            "tasa_interes": _num(f.get("TASA_DE_INTERES")),
+            "tasa_base": _num(f.get("TASA_BASE")),
+            # Duracion INFORMADA, no estimada: el anexo extranjero si la pide.
+            "duracion": _num(f.get("DURACION")),
+            "plazo_al_vencimiento": _num(f.get("PLAZO_ALVENCIMIENTO")),
+            "fecha_emision": f.get("FECHA_EMISION"),
+            "fecha_compra": f.get("FECHA_COMPRA"),
+            "fecha_vencimiento": f.get("FECHA_VENCIMIENTO"),
+            "tipo_amortizacion": _txt(f.get("TIPO_AMORTIZACION")),
+            "tratamiento": _txt(f.get("TRATAMIENTO")),
+            "clasificacion_riesgo": _txt(f.get("CLASIFICACION_DE_RIESGO")),
+            "clasificacion_riesgo_pais": _txt(f.get("CLASIFICACION_DE_RIESGO_PAIS")),
+            "clasificacion_inversion": _txt(f.get("CLASIFICACION_INVERSION")),
+            "incremento_riesgo": _txt(f.get("INCREMENTO_RIESGO")),
+            "en_margen_o_pacto": _txt(f.get("ACTIVO_EN_MARGEN_O_SUJETO_A_PACTO")),
+            "comprado_via_cdv": _txt(f.get("ACTIVO_COMPRADO_A_TRAVES_DE_CDV")),
+            "cobertura": _txt(f.get("COBERTURA")),
+            "custodiado": _txt(f.get("CUSTODIADO")),
+            "custodio": _txt(f.get("NOMBRE_CUSTODIO")),
+            "regulador": _txt(f.get("REGULADOR")),
+            "relacionado": _txt(f.get("RELACIONADO")),
+            "nombre_cartera": _txt(f.get("NOMBRE_CARTERA")),
+            "clasif_valoriz_eeff": _txt(f.get("METOD_CLASIF_VALORIZ_EEFF")),
+            "veredicto": veredicto.verdict.value,
+        })
+        return row
+
+    def extranjero_rv(self, rec: ParsedRecord, zip_origen: str, descargado: str,
+                      veredicto: Any) -> dict[str, Any]:
+        """Renta variable y fondos EXTRANJEROS (B.5 tipo 3)."""
+        f = rec.fields
+        row = self._base(rec, zip_origen, descargado)
+        row.update({
+            "tipo_instrumento": _txt(f.get("TIPO_INSTRUMENTO")),
+            "emisor": _txt(f.get("NOMBRE_EMISOR")),
+            "isin": _txt(f.get("CODIGO_INDIVIDUALIZACION_O_NEMOTECNICO")),
+            "serie": _txt(f.get("SERIE")),
+            "pais": _txt(f.get("PAIS")),
+            "pais_matriz": _txt(f.get("PAIS_MATRIZ")),
+            "bolsa": _txt(f.get("BOLSA")),
+            "moneda": _txt(f.get("MONEDA")),
+            "tipo_fondo": _txt(f.get("TIPO_FONDO")),
+            "segmento_fondo": _txt(f.get("SEGMENTO_FONDO")),
+            "subyacente": _txt(f.get("SUBYACENTE")),
+            "unidades": _num(f.get("UNIDADES")),
+            "cuotas_suscritas": _num(f.get("CUOTAS_SUSCRITAS")),
+            "participacion_pct": _num(f.get("PORCENTAJE_PARTICIPACION")),
+            "valor_bursatil_unitario": _num(f.get("VALOR_BURSATIL_UNITARIO")),
+            "valor_libro": _num(f.get("VALOR_LIBRO")),
+            "valor_bursatil": _num(f.get("VALOR_BURSATIL")),
+            "costo_historico": _num(f.get("COSTO_HISTORICO")),
+            "valor_cuota": _num(f.get("VALOR_CUOTA")),
+            "valor_razonable": _num(f.get("VALOR_RAZONABLE")),
+            "valor_final": _num(f.get("VALOR_FINAL")),
+            "clasificacion_riesgo": _txt(f.get("CLASIFICACION_DE_RIESGO")),
+            "clasificacion_riesgo_pais": _txt(f.get("CLASIFICACION_DE_RIESGO_PAIS")),
+            "en_margen_o_pacto": _txt(f.get("ACTIVO_EN_MARGEN_O_SUJETO_A_PACTO")),
+            "custodio": _txt(f.get("NOMBRE_CUSTODIO")),
+            "relacionado": _txt(f.get("RELACIONADO")),
+            "veredicto": veredicto.verdict.value,
+        })
+        return row
+
+    def otras_inversiones(self, rec: ParsedRecord, zip_origen: str, descargado: str,
+                          veredicto: Any) -> dict[str, Any]:
+        """Otras inversiones (B.6): caja, avances a tenedores, mobiliario."""
+        f = rec.fields
+        row = self._base(rec, zip_origen, descargado)
+        row.update({
+            "codigo_inversion": _txt(f.get("CODIGO_O_NOMBRE_DE_LA_INVERSION")),
+            "nemotecnico": _txt(f.get("NEMOTECNICO")),
+            "tipo_instrumento": _txt(f.get("TIPO_INSTRUMENTO")),
+            "pais": _txt(f.get("PAIS")),
+            "moneda": _txt(f.get("UNIDAD_MONETARIA")),
+            "valor_costo": _num(f.get("VALOR_COSTO_ACTUALIZADO")),
+            "depreciacion": _num(f.get("DEPRECIACION_ACUMULADA")),
+            "valor_razonable": _num(f.get("VALOR RAZONABLE")),
+            "deterioro": _num(f.get("DETERIORO")),
+            "valor_final": _num(f.get("VALOR_FINAL")),
+            "clasificacion_riesgo": _txt(f.get("CLASIFICACION_DE_RIESGO")),
+            "custodio": _txt(f.get("NOMBRE_CUSTODIO")),
+            "veredicto": veredicto.verdict.value,
+        })
+        return row
+
+    def control(self, rec: ParsedRecord, zip_origen: str, descargado: str,
+                veredicto: Any) -> dict[str, Any]:
+        """Informacion de control (B.8): totales por tipo de inversion.
+
+        Sirve de cuadratura transversal: lo que la compania declara como total
+        por clase de activo tiene que calzar con lo que suman los anexos de
+        detalle. Es la comprobacion cruzada que hasta ahora no teniamos.
+        """
+        f = rec.fields
+        row = self._base(rec, zip_origen, descargado)
+        row.update({
+            "tipo_de_inversion": _txt(f.get("TIPO_DE_INVERSION")),
+            "valor_final": _num(f.get("VALOR_FINAL")),
+            "repr_rt_pr": _num(f.get("INVERSIONES_REPRESENTATIVAS_DE_RT_PR")),
+            "no_repr_rt_pr": _num(f.get("INVERSIONES_NO_REPRESENTATIVAS_DE_RT_PR")),
+            "total_costo_amortizado": _num(f.get("TOTAL_COSTO_AMORTIZADO")),
+            "total_valor_razonable": _num(f.get("TOTAL_VALOR_RAZONABLE")),
+            "total_efectivo_equivalente": _num(f.get("TOTAL_EFECTIVO_EQUIVALENTE")),
+            "total_cui_apv": _num(f.get("TOTAL_INSTRUMENTOS_CUI_APV")),
+            "total_otras_clasif": _num(f.get("TOTAL_INST_OTRAS_CLASIF")),
+            "total_soc_filiales": _num(f.get("TOTAL_SOC_FILIALES")),
+            "total_coligadas": _num(f.get("TOTAL_COLIGADAS")),
+            "veredicto": veredicto.verdict.value,
+        })
+        return row
+
     def garantia(self, rec: ParsedRecord, zip_origen: str, descargado: str,
                  veredicto: Any) -> dict[str, Any]:
         f = rec.fields
@@ -625,7 +770,8 @@ class Loader:
     """Recorre los ZIP y escribe Parquet particionado por periodo."""
 
     HECHOS = ("fact_derivado", "fact_renta_fija", "fact_garantia", "fact_cuarentena",
-              "fact_equity", "fact_fondo", "dim_compania_src")
+              "fact_equity", "fact_fondo", "fact_extranjero_rf", "fact_extranjero_rv",
+              "fact_otras_inv", "fact_control", "dim_compania_src")
 
     def __init__(self, out: Path, *, layouts: Path = LAYOUTS, entities: Path = ENTITIES) -> None:
         self.out = out
@@ -650,7 +796,7 @@ class Loader:
                     spec, _rut, _per = self.engine.describe(base)
                 except UnknownFileTypeError:
                     continue
-                if spec.letter not in ("I", "P", "G", "A", "F"):
+                if spec.letter not in ("I", "P", "G", "A", "F", "X", "O", "C"):
                     continue
                 for rec in self.engine.parse_file(base, data=z.read(info)):
                     # La generacion vieja (pre 202412) tiene otro largo de
@@ -687,6 +833,20 @@ class Loader:
             if v.verdict is Verdict.QUARANTINE:
                 return "fact_cuarentena", self.build.cuarentena(rec, zip_origen, descargado, v)
             return "fact_renta_fija", self.build.renta_fija(rec, zip_origen, descargado, v)
+        if L == "X" and t in ("2", "3"):
+            v = self.validator.validate(L, t, rec.fields,
+                                        untrusted=rec.untrusted, periodo=rec.periodo)
+            if t == "2":
+                return "fact_extranjero_rf", self.build.extranjero_rf(rec, zip_origen, descargado, v)
+            return "fact_extranjero_rv", self.build.extranjero_rv(rec, zip_origen, descargado, v)
+        if L == "O" and t == "2":
+            v = self.validator.validate(L, t, rec.fields,
+                                        untrusted=rec.untrusted, periodo=rec.periodo)
+            return "fact_otras_inv", self.build.otras_inversiones(rec, zip_origen, descargado, v)
+        if L == "C" and t == "2":
+            v = self.validator.validate(L, t, rec.fields,
+                                        untrusted=rec.untrusted, periodo=rec.periodo)
+            return "fact_control", self.build.control(rec, zip_origen, descargado, v)
         if L == "A" and t == "2":
             v = self.validator.validate(L, t, rec.fields,
                                         untrusted=rec.untrusted, periodo=rec.periodo)
@@ -748,6 +908,10 @@ CREATE OR REPLACE VIEW raw_renta_fija AS SELECT * FROM read_parquet('{root}/fact
 CREATE OR REPLACE VIEW raw_garantia   AS SELECT * FROM read_parquet('{root}/fact_garantia/*/*.parquet',   union_by_name=true, hive_partitioning=true);
 CREATE OR REPLACE VIEW raw_equity     AS SELECT * FROM read_parquet('{root}/fact_equity/*/*.parquet',     union_by_name=true, hive_partitioning=true);
 CREATE OR REPLACE VIEW raw_fondo      AS SELECT * FROM read_parquet('{root}/fact_fondo/*/*.parquet',      union_by_name=true, hive_partitioning=true);
+CREATE OR REPLACE VIEW raw_extranjero_rf AS SELECT * FROM read_parquet('{root}/fact_extranjero_rf/*/*.parquet', union_by_name=true, hive_partitioning=true);
+CREATE OR REPLACE VIEW raw_extranjero_rv AS SELECT * FROM read_parquet('{root}/fact_extranjero_rv/*/*.parquet', union_by_name=true, hive_partitioning=true);
+CREATE OR REPLACE VIEW raw_otras_inv     AS SELECT * FROM read_parquet('{root}/fact_otras_inv/*/*.parquet',     union_by_name=true, hive_partitioning=true);
+CREATE OR REPLACE VIEW raw_control       AS SELECT * FROM read_parquet('{root}/fact_control/*/*.parquet',       union_by_name=true, hive_partitioning=true);
 CREATE OR REPLACE VIEW raw_cuarentena AS SELECT * FROM read_parquet('{root}/fact_cuarentena/*/*.parquet', union_by_name=true, hive_partitioning=true);
 
 -- --- bitemporal ------------------------------------------------------------
@@ -831,6 +995,10 @@ JOIN publicacion_vigente v
   ON v.periodo_informacion = r.periodo_informacion
  AND v.zip_origen = r.zip_origen AND v.recencia = 1;
 
+CREATE OR REPLACE VIEW fact_extranjero_rf AS SELECT * FROM raw_extranjero_rf;
+CREATE OR REPLACE VIEW fact_extranjero_rv AS SELECT * FROM raw_extranjero_rv;
+CREATE OR REPLACE VIEW fact_otras_inv     AS SELECT * FROM raw_otras_inv;
+CREATE OR REPLACE VIEW fact_control       AS SELECT * FROM raw_control;
 CREATE OR REPLACE VIEW fact_equity     AS SELECT * FROM raw_equity;
 CREATE OR REPLACE VIEW fact_fondo      AS SELECT * FROM raw_fondo;
 CREATE OR REPLACE VIEW fact_garantia   AS SELECT * FROM raw_garantia;
@@ -855,7 +1023,8 @@ def construir_duckdb(out: Path, db: Path) -> dict[str, int]:
     con.execute(DDL.format(root=out.as_posix()))
 
     conteos: dict[str, int] = {}
-    for t in ("fact_derivado", "fact_renta_fija", "fact_equity", "fact_fondo",
+    for t in ("fact_derivado", "fact_renta_fija", "fact_extranjero_rf", "fact_extranjero_rv",
+              "fact_equity", "fact_fondo", "fact_otras_inv", "fact_control",
               "fact_garantia", "fact_cuarentena",
               "dim_periodo", "dim_compania", "dim_contraparte", "dim_instrumento"):
         try:
