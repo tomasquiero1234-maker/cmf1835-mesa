@@ -1304,7 +1304,7 @@ def vista_tasas(f: dict) -> None:
         piv = piv.loc[piv.sum(axis=1).sort_values(ascending=False).index]
     st.dataframe(piv.round(0), width="stretch", column_config=tabla_miles(piv))
 
-    with st.expander("Detalle de operaciones"):
+    with st.expander("Detalle de operaciones", expanded=True):
         cols = ["periodo_informacion", "aseguradora", "contraparte_grupo", "instrumento",
                 "direccion", "indice_flotante", "tenor_anios", "tasa_fija",
                 "tasa_precio_mercado", "spread_patas_pb", "nocional_m", "mtm_neto_m",
@@ -1388,7 +1388,7 @@ def vista_fx_ccs(f: dict) -> None:
                               legend=dict(orientation="h", y=-0.35)))
     c2.plotly_chart(fig3, width="stretch", key="fxccs_por_banco")
 
-    with st.expander("Detalle de operaciones"):
+    with st.expander("Detalle de operaciones", expanded=True):
         cols = ["periodo_informacion", "aseguradora", "contraparte_grupo", "instrumento",
                 "cruce_monedas", "moneda_entrega", "moneda_recibe", "tenor_anios",
                 "tipo_cambio_contrato", "tipo_cambio_mercado", "nocional_m",
@@ -1470,7 +1470,7 @@ def vista_renta_fija(f: dict) -> None:
     st.dataframe(resumen.round(2), width="stretch", hide_index=True,
                  column_config=tabla_miles(resumen))
 
-    with st.expander("Detalle de papeles"):
+    with st.expander("Detalle de papeles", expanded=True):
         cols = ["periodo_informacion", "aseguradora", "ambito", "segmento_emisor",
                 "tipo_instrumento", "instrumento_id", "emisor_nombre", "moneda",
                 "valor_final", "tir_compra", "tir_mercado", "duracion",
