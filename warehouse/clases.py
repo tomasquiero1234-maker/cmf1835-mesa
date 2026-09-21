@@ -139,9 +139,17 @@ SELECT *,
 
     -- La tasa fija del contrato: la que va al eje Y de la curva. Si una pata
     -- es fija se usa esa; si las dos lo son, la larga.
+    --
+    -- Sin caer a tasa_precio_contrato como respaldo: en 940 registros donde
+    -- NINGUNA pata trae tipo declarado, ese campo no es una tasa porcentual
+    -- sino algo del orden de 40.000-49.000, casi exactamente el nivel de la
+    -- UF del periodo (40.845-40.873 en 202608). Es un valor de referencia
+    -- UF/CLP mal etiquetado por el informante, no un cupon. Graficarlo como
+    -- tasa aplastaba la curva real (0-8%) contra el piso del grafico.
     CASE
         WHEN upper(COALESCE(pata_larga_tipo, '')) = 'FIJA' THEN pata_larga_tasa
         WHEN upper(COALESCE(pata_corta_tipo, '')) = 'FIJA' THEN pata_corta_tasa
+        WHEN pata_larga_tipo IS NULL AND pata_corta_tipo IS NULL THEN NULL
         ELSE tasa_precio_contrato
     END AS tasa_fija,
 
