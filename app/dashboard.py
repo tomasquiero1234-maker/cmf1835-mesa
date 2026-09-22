@@ -1553,41 +1553,72 @@ def vista_renta_fija(f: dict) -> None:
     ruts = f.get("companias") or []
     filtro_rut = (f"AND d.rut_compania IN ({', '.join(str(r) for r in ruts)})"
                   if ruts and len(ruts) < len(f.get("_companias_all", [])) else "")
-    df = q(f"""
-        SELECT d.*, {nombre_compania_sql()} AS aseguradora_nombre
-        FROM v_renta_fija_clasificada d {JOIN_COMP}
-        WHERE d.periodo_informacion IN ({pers}) {filtro_rut}
-    """)
-    if df.empty:
+    base = (f"FROM v_renta_fija_clasificada d {JOIN_COMP} "
+            f"WHERE d.periodo_informacion IN ({pers}) {filtro_rut}")
+
+    # El libro de renta fija son cientos de miles de papeles. Traerlo entero a
+    # pandas para sacar cuatro promedios cuesta ~190 MB y tumba el contenedor:
+    # los tres desplegables salen de un DISTINCT, y todo lo demas se agrega en
+    # DuckDB. Solo se materializa el detalle que de verdad se muestra.
+    opciones = q(f"SELECT DISTINCT d.ambito, d.segmento_emisor, d.moneda {base}")
+    if opciones.empty:
         st.info("Sin renta fija para estos filtros."); return
-    df = _con_cortos(df)
 
     c1, c2, c3 = st.columns(3)
-    ambitos = sorted(df.ambito.unique())
+    ambitos = sorted(opciones.ambito.dropna().unique())
     amb = c1.multiselect("Ambito", ambitos, default=ambitos)
-    segs = sorted(df.segmento_emisor.unique())
+    segs = sorted(opciones.segmento_emisor.dropna().unique())
     seg = c2.multiselect("Segmento de emisor", segs, default=segs)
-    mons = sorted(df.moneda.dropna().unique())
+    mons = sorted(opciones.moneda.dropna().unique())
     mon = c3.multiselect("Moneda", mons, default=mons)
-    d = df[df.ambito.isin(amb) & df.segmento_emisor.isin(seg) & df.moneda.isin(mon)]
-    if d.empty:
+
+    sel = base
+    for col, elegido, universo in (("ambito", amb, ambitos),
+                                   ("segmento_emisor", seg, segs),
+                                   ("moneda", mon, mons)):
+        if elegido and len(elegido) < len(universo):
+            sel += f" AND d.{col} IN ({', '.join(_lit(v) for v in elegido)})"
+        elif not elegido:
+            sel += " AND 1=0"
+
+    kpi = q(f"""SELECT count(*) AS papeles,
+                       COALESCE(sum(d.valor_final), 0) / {M_A_MM} AS valor_mm,
+                       avg(d.duracion) AS duracion, avg(d.tir_mercado) AS tir {sel}""")
+    if not int(kpi.papeles[0]):
         st.info("Sin papeles con esa combinacion."); return
 
     k = st.columns(4)
-    k[0].metric("Papeles", f"{len(d):,}")
-    k[1].metric("Valor final (MM$)", f"{a_mm(d.valor_final.fillna(0)).sum():,.0f}")
-    k[2].metric("Duracion media", f"{d.duracion.mean():,.1f}")
-    k[3].metric("TIR mercado media", f"{d.tir_mercado.mean():,.2f}%")
+    k[0].metric("Papeles", f"{int(kpi.papeles[0]):,}")
+    k[1].metric("Valor final (MM$)", f"{float(kpi.valor_mm[0] or 0):,.0f}")
+    k[2].metric("Duracion media", f"{float(kpi.duracion[0] or 0):,.1f}")
+    k[3].metric("TIR mercado media", f"{float(kpi.tir[0] or 0):,.2f}%")
 
-    resumen = (d.assign(v=a_mm(d.valor_final.fillna(0)))
-                 .groupby(["ambito", "segmento_emisor"], as_index=False)
-                 .agg(papeles=("instrumento_id", "count"), valor_mm=("v", "sum"),
-                      duracion=("duracion", "mean"), tir=("tir_mercado", "mean")))
+    resumen = q(f"""
+        SELECT d.ambito, d.segmento_emisor,
+               count(d.instrumento_id) AS papeles,
+               COALESCE(sum(d.valor_final), 0) / {M_A_MM} AS valor_mm,
+               avg(d.duracion) AS duracion, avg(d.tir_mercado) AS tir
+        {sel} GROUP BY 1, 2 ORDER BY 1, 2""")
     fig = px.bar(resumen, x="segmento_emisor", y="valor_mm", color="ambito",
                  barmode="group", text_auto=",.0f",
                  labels={"segmento_emisor": "", "valor_mm": "Valor final (MM$)"})
     eje_mm(fig.update_layout(height=400, margin=dict(t=28)), titulo="Valor final (MM$)")
     st.plotly_chart(fig, width="stretch", key="vista_renta_fija_g8")
+
+    # Unica materializacion fila a fila de toda la vista, y acotada: alimenta el
+    # scatter y la tabla de detalle. Antes se traian los cientos de miles de
+    # papeles para graficarlos todos, cosa que ni el navegador ni el contenedor
+    # aguantan. Se ordena por valor porque es el corte que le importa a la mesa.
+    TOPE_RF = 5_000
+    d = _con_cortos(q(f"""
+        SELECT d.*, {nombre_compania_sql()} AS aseguradora_nombre
+        {sel} ORDER BY d.valor_final DESC NULLS LAST LIMIT {TOPE_RF}"""))
+    total = int(kpi.papeles[0])
+    if total > TOPE_RF:
+        st.caption(f"El scatter y el detalle muestran los {TOPE_RF:,} papeles de "
+                   f"mayor valor final, de {total:,} que cumplen el filtro. Los KPI "
+                   f"y el resumen de arriba si abarcan los {total:,}. Para el libro "
+                   f"completo, usa el Explorador libre.")
 
     st.markdown("**Duracion contra TIR** — el tamano es el valor del papel")
     disp = d[d.duracion.notna() & d.tir_mercado.notna()].copy()
@@ -1621,9 +1652,12 @@ def vista_renta_fija(f: dict) -> None:
         det["valor_final"] = a_mm(det.valor_final)
         det = det.rename(columns={"valor_final": "valor_mm",
                                   "periodo_informacion": "periodo"})
-        st.dataframe(det.sort_values("valor_mm", ascending=False).head(5000),
-                     width="stretch", hide_index=True, column_config=tabla_miles(det))
-        st.download_button("Descargar renta fija (CSV)",
+        det = det.sort_values("valor_mm", ascending=False)
+        st.dataframe(det, width="stretch", hide_index=True,
+                     column_config=tabla_miles(det))
+        # El CSV baja exactamente lo que se ve, no el libro entero: generarlo
+        # eagerly sobre cientos de miles de filas se hace en cada render.
+        st.download_button(f"Descargar estos {len(det):,} papeles (CSV)",
                            det.to_csv(index=False).encode("utf-8"),
                            "renta_fija.csv", "text/csv")
 
