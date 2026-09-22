@@ -1865,6 +1865,25 @@ def _x_tenor(tabla: str) -> str:
             "|| '01', '%Y%m%d')), d.fecha_vencimiento) / 365.25")
 
 
+#: Mes en castellano abreviado. DuckDB rotula los meses en ingles y depende
+#: del locale del contenedor, asi que se arma explicito: el rotulo no puede
+#: cambiar segun donde corra la app.
+_MESES = ("ene", "feb", "mar", "abr", "may", "jun",
+          "jul", "ago", "sep", "oct", "nov", "dic")
+
+
+def _x_periodo(col: str) -> str:
+    """AAAAMM -> 'jun-26'.
+
+    Ademas de leerse mejor, evita que plotly trate el periodo como numero y
+    lo abrevie a '202.606k', que es lo que hacia antes.
+    """
+    mm = f"substr(CAST({col} AS VARCHAR), 5, 2)"
+    casos = " ".join(f"WHEN '{i + 1:02d}' THEN '{m}'" for i, m in enumerate(_MESES))
+    return (f"(CASE {mm} {casos} ELSE {mm} END || '-' || "
+            f"substr(CAST({col} AS VARCHAR), 3, 2))")
+
+
 def _y(where: str, cond: str) -> str:
     """Agrega una condicion a un WHERE ya armado (que puede venir vacio)."""
     if not cond:
@@ -1880,34 +1899,83 @@ def _aviso_tope(df, tope: int) -> None:
 
 # --- graficos comunes a cualquier instrumento ------------------------------
 
-def _g_noc_cp(tabla, where, clave):
-    df = q(f"""SELECT d.contraparte_grupo AS grupo,
-                      sum(d.nocional_m) / {M_A_MM} AS nocional_mm,
-                      count(*) AS operaciones
-               FROM {tabla} d {where} GROUP BY 1
-               ORDER BY nocional_mm DESC NULLS LAST LIMIT 20""")
+def _modo_apertura(tabla: str, where: str, clave: str) -> str:
+    """Selector de desagregacion para los graficos de contraparte.
+
+    Abrir solo por contraparte da UNA barra cuando el filtro dejo un solo
+    grupo, que es justo el caso en que no se puede comparar nada. Por eso el
+    valor por defecto se adapta a lo que el filtro dejo.
+    """
+    n = q(f"SELECT count(DISTINCT d.contraparte_grupo) AS n FROM {tabla} d {where}")
+    una_sola = (not n.empty) and int(n.n[0] or 0) <= 1
+    opciones = ["Contraparte", "Aseguradora", "Contraparte x Aseguradora"]
+    return st.radio("Abrir por", opciones, index=1 if una_sola else 0,
+                    horizontal=True, key=f"expl_eje_{clave}_{tabla}",
+                    help="'Aseguradora' abre la contraparte elegida contra cada "
+                         "aseguradora. 'Contraparte x Aseguradora' cruza las dos.")
+
+
+def _g_barras_cp(tabla, where, clave, *, expr, rotulo, por_signo):
+    """Barras por contraparte, por aseguradora o cruzando ambas."""
+    modo = _modo_apertura(tabla, where, clave)
+    nom = nombre_compania_sql()
+    cruce = modo == "Contraparte x Aseguradora"
+    tope = 40 if cruce else 20
+
+    if modo == "Contraparte":
+        df = q(f"""SELECT d.contraparte_grupo AS etiqueta,
+                          sum({expr}) / {M_A_MM} AS valor, count(*) AS operaciones
+                   FROM {tabla} d {where} GROUP BY 1
+                   ORDER BY abs(sum({expr})) DESC NULLS LAST LIMIT {tope}""")
+        color = None
+    else:
+        dim = "d.contraparte_grupo AS etiqueta, " if cruce else ""
+        df = q(f"""SELECT {dim}d.rut_compania, {nom} AS nombre,
+                          sum({expr}) / {M_A_MM} AS valor, count(*) AS operaciones
+                   FROM {tabla} d {JOIN_COMP} {where}
+                   GROUP BY {'1, 2, 3' if cruce else '1, 2'}
+                   ORDER BY abs(sum({expr})) DESC NULLS LAST LIMIT {tope}""")
+        if not df.empty:
+            cortos = [corto(r, n) for r, n in zip(df.rut_compania, df.nombre)]
+            if cruce:
+                df["aseguradora"] = cortos
+            else:
+                df["etiqueta"] = cortos
+        color = "aseguradora" if cruce else None
+
     if df.empty:
         st.info("Sin datos para graficar."); return
-    fig = px.bar(df, x="grupo", y="nocional_mm", text_auto=",.0f",
+
+    # El color por signo solo tiene sentido cuando no se usa para distinguir
+    # aseguradoras: en el cruce el signo se lee por el lado del cero.
+    if por_signo and not cruce:
+        df["posicion"] = ["A favor" if v >= 0 else "En contra" for v in df.valor]
+        color = "posicion"
+        mapa = {"A favor": "#2e7d32", "En contra": "#c62828"}
+    else:
+        mapa = None
+
+    fig = px.bar(df, x="etiqueta", y="valor", color=color, text_auto=",.0f",
+                 barmode="group", color_discrete_map=mapa,
                  hover_data={"operaciones": ":,"},
-                 labels={"grupo": "", "nocional_mm": "Nocional (MM$)"})
-    eje_mm(fig.update_layout(height=420, margin=dict(t=28)))
-    st.plotly_chart(fig, width="stretch", key=f"expl_g_{clave}")
+                 labels={"etiqueta": "", "valor": rotulo})
+    if por_signo:
+        fig.add_hline(y=0, line_dash="dot", line_color="#888")
+    eje_mm(fig.update_layout(height=460, margin=dict(t=28),
+                             legend=dict(orientation="h", y=-0.25)), titulo=rotulo)
+    st.plotly_chart(fig, width="stretch", key=f"expl_g_{clave}_{modo}")
+    if len(df) >= tope:
+        st.caption(f"Se muestran las {tope} combinaciones de mayor magnitud.")
+
+
+def _g_noc_cp(tabla, where, clave):
+    _g_barras_cp(tabla, where, clave, expr="d.nocional_m",
+                 rotulo="Nocional (MM$)", por_signo=False)
 
 
 def _g_mtm_cp(tabla, where, clave):
-    mtm = _x_mtm(tabla)
-    df = q(f"""SELECT d.contraparte_grupo AS grupo, sum({mtm}) / {M_A_MM} AS mtm_mm
-               FROM {tabla} d {where} GROUP BY 1
-               ORDER BY abs(sum({mtm})) DESC NULLS LAST LIMIT 20""")
-    if df.empty:
-        st.info("Sin datos para graficar."); return
-    df["posicion"] = ["A favor" if v >= 0 else "En contra" for v in df.mtm_mm]
-    fig = px.bar(df, x="grupo", y="mtm_mm", color="posicion", text_auto=",.0f",
-                 color_discrete_map={"A favor": "#2e7d32", "En contra": "#c62828"},
-                 labels={"grupo": "", "mtm_mm": "MTM neto (MM$)"})
-    eje_mm(fig.update_layout(height=420, margin=dict(t=28)), titulo="MTM neto (MM$)")
-    st.plotly_chart(fig, width="stretch", key=f"expl_g_{clave}")
+    _g_barras_cp(tabla, where, clave, expr=_x_mtm(tabla),
+                 rotulo="MTM neto (MM$)", por_signo=True)
 
 
 def _g_tramo(tabla, where, clave):
@@ -1932,14 +2000,19 @@ def _g_tramo(tabla, where, clave):
 
 
 def _g_evol(tabla, where, clave):
-    df = q(f"""SELECT CAST(d.periodo_informacion AS VARCHAR) AS periodo,
+    df = q(f"""SELECT {_x_periodo('d.periodo_informacion')} AS periodo,
+                      d.periodo_informacion AS orden,
                       sum(d.nocional_m) / {M_A_MM} AS nocional_mm, count(*) AS operaciones
-               FROM {tabla} d {where} GROUP BY 1 ORDER BY 1""")
+               FROM {tabla} d {where} GROUP BY 1, 2 ORDER BY orden""")
     if len(df) < 2:
         st.info("Se necesita mas de un periodo seleccionado en el sidebar."); return
     fig = px.line(df, x="periodo", y="nocional_mm", markers=True,
-                  hover_data={"operaciones": ":,"},
+                  hover_data={"operaciones": ":,", "orden": False},
                   labels={"periodo": "", "nocional_mm": "Nocional (MM$)"})
+    # Categorico y en el orden del query: si no, plotly ordena 'abr' antes que
+    # 'ene' por alfabeto y la serie temporal queda desordenada.
+    fig.update_xaxes(type="category", categoryorder="array",
+                     categoryarray=list(df.periodo))
     eje_mm(fig.update_layout(height=420, margin=dict(t=28)))
     st.plotly_chart(fig, width="stretch", key=f"expl_g_{clave}")
 
@@ -2093,14 +2166,17 @@ def _g_rf_curva(tabla, where, clave):
 
 
 def _g_rf_evol(tabla, where, clave):
-    df = q(f"""SELECT CAST(d.periodo_informacion AS VARCHAR) AS periodo,
+    df = q(f"""SELECT {_x_periodo('d.periodo_informacion')} AS periodo,
+                      d.periodo_informacion AS orden,
                       sum(d.valor_final) / {M_A_MM} AS valor_mm, count(*) AS papeles
-               FROM {tabla} d {where} GROUP BY 1 ORDER BY 1""")
+               FROM {tabla} d {where} GROUP BY 1, 2 ORDER BY orden""")
     if len(df) < 2:
         st.info("Se necesita mas de un periodo seleccionado en el sidebar."); return
     fig = px.line(df, x="periodo", y="valor_mm", markers=True,
-                  hover_data={"papeles": ":,"},
+                  hover_data={"papeles": ":,", "orden": False},
                   labels={"periodo": "", "valor_mm": "Valor final (MM$)"})
+    fig.update_xaxes(type="category", categoryorder="array",
+                     categoryarray=list(df.periodo))
     eje_mm(fig.update_layout(height=420, margin=dict(t=28)), titulo="Valor final (MM$)")
     st.plotly_chart(fig, width="stretch", key=f"expl_g_{clave}")
 

@@ -40,6 +40,9 @@ PROHIBIDOS = {
 TABLAS = ["v_derivado_clasificado", "fact_derivado",
           "v_renta_fija_clasificada", "fact_renta_fija"]
 
+#: Desagregaciones del selector 'Abrir por' de los graficos de contraparte.
+MODOS = ("Contraparte", "Aseguradora", "Contraparte x Aseguradora")
+
 
 def main() -> int:
     con = D.conectar()
@@ -83,12 +86,17 @@ def main() -> int:
             # ejecuta el SQL del grafico, que es donde puede romperse.
             rotos = []
             for titulo, clave, fn, _x in ok_titulos:
-                try:
-                    _ejecutar_sql_de(fn, tabla, wg, clave, con)
-                    dibujados += 1
-                except Exception as e:  # noqa: BLE001
-                    rotos.append(f"{titulo}: {type(e).__name__}: {e}")
-                    fallas.append(f"{tabla}/{sub}/{titulo}: {type(e).__name__}: {e}")
+                # Los graficos de contraparte se recorren en sus tres
+                # desagregaciones: cada una arma un SQL distinto.
+                modos = (MODOS if clave in ("noc_cp", "mtm_cp") else (None,))
+                for modo in modos:
+                    try:
+                        _ejecutar_sql_de(fn, tabla, wg, clave, con, modo)
+                        dibujados += 1
+                    except Exception as e:  # noqa: BLE001
+                        etq = f"{titulo}{f' [{modo}]' if modo else ''}"
+                        rotos.append(f"{etq}: {type(e).__name__}: {e}")
+                        fallas.append(f"{tabla}/{sub}/{etq}: {type(e).__name__}: {e}")
 
             etiqueta = sub or "(ejes comunes)"
             print(f"   {'OK' if not (malos or rotos) else 'XX'} {etiqueta:12} "
@@ -105,21 +113,26 @@ def main() -> int:
     return 1 if fallas else 0
 
 
-def _ejecutar_sql_de(fn, tabla, where, clave, con):
+def _ejecutar_sql_de(fn, tabla, where, clave, con, modo=None):
     """Corre el grafico con st y px neutralizados: solo interesa que el SQL
-    y el armado del DataFrame no revienten."""
-    import types
-    import pandas as pd
+    y el armado del DataFrame no revienten.
 
-    capt = {}
+    `modo` fuerza la respuesta del selector 'Abrir por' de los graficos de
+    contraparte, para poder recorrer sus tres desagregaciones.
+    """
+    import types
 
     def q_real(sql):
-        capt["sql"] = sql
         return con.execute(sql).fetch_df()
+
+    def falso_radio(_label, opciones, index=0, **k):
+        if modo is not None and modo in opciones:
+            return modo
+        return opciones[index]
 
     falso_st = types.SimpleNamespace(
         info=lambda *a, **k: None, caption=lambda *a, **k: None,
-        plotly_chart=lambda *a, **k: None)
+        plotly_chart=lambda *a, **k: None, radio=falso_radio)
 
     class FalsoPX:
         def __getattr__(self, _n):
