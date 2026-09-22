@@ -76,8 +76,18 @@ WITH base AS (
            {_MONEDA.format(col='d.moneda_larga')}      AS m_larga,
            {_MONEDA.format(col='d.moneda_corta_swap')} AS m_corta,
            {_MONEDA.format(col='d.moneda')}            AS m_fwd,
-           {_INDICE.format(a='d.pata_larga_tipo', b='d.pata_corta_tipo')} AS indice
+           {_INDICE.format(a='d.pata_larga_tipo', b='d.pata_corta_tipo')} AS indice,
+           u.uf_cierre,
+           -- La tasa fija del contrato. Se calcula aqui, y no en el SELECT de
+           -- afuera, para poder derivar el spread contra mercado sobre ella.
+           CASE
+               WHEN upper(COALESCE(d.pata_larga_tipo, '')) = 'FIJA' THEN d.pata_larga_tasa
+               WHEN upper(COALESCE(d.pata_corta_tipo, '')) = 'FIJA' THEN d.pata_corta_tasa
+               WHEN d.pata_larga_tipo IS NULL AND d.pata_corta_tipo IS NULL THEN NULL
+               ELSE d.tasa_precio_contrato
+           END AS tf
     FROM fact_derivado d
+    LEFT JOIN uf_cierre_mes u ON u.periodo = d.periodo_informacion
 )
 SELECT *,
     -- La moneda manda sobre el codigo oficial de TIPO_CONTRATO cuando las dos
@@ -161,21 +171,30 @@ SELECT *,
         ELSE 'Sin determinar'
     END AS direccion,
 
-    -- La tasa fija del contrato: la que va al eje Y de la curva. Si una pata
-    -- es fija se usa esa; si las dos lo son, la larga.
+    -- La tasa fija del contrato, calculada en el CTE `base`. No cae a
+    -- tasa_precio_contrato cuando ninguna pata trae tipo declarado: en 940
+    -- registros ese campo no es una tasa porcentual sino el nivel de la UF
+    -- del periodo, mal etiquetado por el informante.
+    tf AS tasa_fija,
+
+    -- El spread que le sirve a la mesa: cuanto esta la tasa pactada por
+    -- encima o por debajo del mercado, en puntos base. Es la medida de si la
+    -- posicion esta in o out of the money.
     --
-    -- Sin caer a tasa_precio_contrato como respaldo: en 940 registros donde
-    -- NINGUNA pata trae tipo declarado, ese campo no es una tasa porcentual
-    -- sino algo del orden de 40.000-49.000, casi exactamente el nivel de la
-    -- UF del periodo (40.845-40.873 en 202608). Es un valor de referencia
-    -- UF/CLP mal etiquetado por el informante, no un cupon. Graficarlo como
-    -- tasa aplastaba la curva real (0-8%) contra el piso del grafico.
-    CASE
-        WHEN upper(COALESCE(pata_larga_tipo, '')) = 'FIJA' THEN pata_larga_tasa
-        WHEN upper(COALESCE(pata_corta_tipo, '')) = 'FIJA' THEN pata_corta_tasa
-        WHEN pata_larga_tipo IS NULL AND pata_corta_tipo IS NULL THEN NULL
-        ELSE tasa_precio_contrato
-    END AS tasa_fija,
+    -- NO confundir con `spread_patas_pb`, que viene crudo del anexo y para un
+    -- IRS no significa nada: como la pata flotante se informa con tasa 0, ese
+    -- campo devuelve la tasa fija multiplicada por 100 (folio 7905: 494.5,
+    -- que es solo 4.945 x 100). El spread real de esa operacion son 21.8 pb.
+    CASE WHEN tf IS NOT NULL AND tasa_precio_mercado IS NOT NULL
+         THEN ROUND((tf - tasa_precio_mercado) * 100, 1)
+    END AS spread_vs_mercado_pb,
+
+    -- Los forwards de UF se pactan por cantidades redondas de UF (500.000,
+    -- 550.000). Mostrar las unidades, y no solo el monto en pesos, es como
+    -- los mira la mesa.
+    CASE WHEN producto = 'FORWARD' AND uf_cierre > 0
+         THEN ROUND(nocional_m * 1000 / uf_cierre, 0)
+    END AS unidades_uf,
 
     COALESCE(mtm_contrato_m,
              COALESCE(mtm_activo_m, 0) - COALESCE(mtm_pasivo_m, 0)) AS mtm_neto_m

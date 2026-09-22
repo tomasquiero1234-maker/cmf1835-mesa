@@ -1237,105 +1237,174 @@ def _con_cortos(df):
     return df
 
 
-def vista_tasas(f: dict) -> None:
-    st.subheader("Tasas — Swap Scanner")
-    st.caption("IRS y forwards de inflacion. La curva es tasa fija contra tenor; "
-               "el color dice si el cliente paga o recibe fija.")
+def _tabla_detalle(d, cols, renombres=None, titulo="Detalle de operaciones",
+                   archivo="detalle.csv", key=None):
+    """Tabla de detalle con SOLO las columnas que aplican al instrumento.
 
-    df = _con_cortos(_base_clasificada(f, ("TASAS",)))
-    if df.empty:
-        st.info("Sin operaciones de tasa para estos filtros."); return
+    Mezclar instrumentos distintos en una misma tabla rompe el significado de
+    las columnas: `tasa_precio_mercado` en un IRS es un porcentaje (4,73) y en
+    un forward de UF es un nivel de la unidad (40.729). La misma celda, dos
+    unidades. Por eso cada familia tiene su propia tabla y su propio juego de
+    columnas, en vez de una sabana con la mitad de los campos vacios.
+    """
+    presentes = [c for c in cols if c in d.columns]
+    det = d[presentes].copy()
+    if "nocional_m" in det.columns:
+        det["nocional_m"] = a_mm(det.nocional_m)
+    det = det.rename(columns={"nocional_m": "nocional_mm",
+                              "periodo_informacion": "periodo",
+                              **(renombres or {})})
+    orden = "nocional_mm" if "nocional_mm" in det.columns else det.columns[0]
+    det = det.sort_values(orden, ascending=False, na_position="last")
+    st.markdown(f"**{titulo}** — {len(det):,} operaciones")
+    st.dataframe(det, width="stretch", hide_index=True,
+                 column_config=tabla_miles(det))
+    st.download_button(f"Descargar {titulo.lower()} (CSV)",
+                       det.to_csv(index=False).encode("utf-8"), archivo, "text/csv",
+                       key=key)
+    return det
+
+
+def _panel_irs(d) -> None:
+    """IRS: cobertura de tasa. Curva de tasa fija contra tenor."""
+    if d.empty:
+        st.info("Sin IRS para estos filtros."); return
 
     c = st.columns(4)
-    c[0].metric("Operaciones", f"{len(df):,}")
-    c[1].metric("Nocional (MM$)", f"{a_mm(df.nocional_m.fillna(0)).sum():,.0f}")
-    c[2].metric("Instrumentos", f"{df.instrumento.nunique()}")
-    c[3].metric("Contrapartes", f"{df.contraparte_grupo.nunique()}")
-
-    instrumentos = sorted(df.instrumento.dropna().unique())
-    sel = st.multiselect("Instrumento", instrumentos, default=instrumentos)
-    d = df[df.instrumento.isin(sel)] if sel else df
+    c[0].metric("Operaciones", f"{len(d):,}")
+    c[1].metric("Nocional (MM$)", f"{a_mm(d.nocional_m.fillna(0)).sum():,.0f}")
+    c[2].metric("Paga Fija", f"{(d.direccion == 'Paga Fija').sum():,}")
+    c[3].metric("Recibe Fija", f"{(d.direccion == 'Recibe Fija').sum():,}")
 
     curva = d[d.tenor_anios.notna() & d.tasa_fija.notna() & (d.tenor_anios > 0)]
     if curva.empty:
         st.warning("Ninguna operacion tiene tenor y tasa fija informados a la vez.")
     else:
-        color_por = st.radio("Colorear por", ["Direccion", "Contraparte", "Instrumento"],
-                             horizontal=True)
+        color_por = st.radio("Colorear por", ["Direccion", "Contraparte", "Indice"],
+                             horizontal=True, key="irs_color")
         col = {"Direccion": "direccion", "Contraparte": "contraparte_grupo",
-               "Instrumento": "instrumento"}[color_por]
+               "Indice": "indice_flotante"}[color_por]
         curva = curva.assign(nocional_mm=a_mm(curva.nocional_m.fillna(0)).abs())
         fig = px.scatter(
             curva, x="tenor_anios", y="tasa_fija", color=col,
             size=curva.nocional_mm + 1, size_max=26, opacity=0.8,
             color_discrete_map={"Paga Fija": "#c62828", "Recibe Fija": "#2e7d32",
                                 "Fija contra Fija": "#1565c0",
-                                "Flotante contra Flotante": "#f9a825",
                                 "Sin determinar": "#9e9e9e"},
             labels={"tenor_anios": "Tenor (anios)", "tasa_fija": "Tasa fija (%)",
                     col: color_por},
             hover_data={
-                "folio_operacion": True, "item_operacion": True, "aseguradora": True,
-                "contraparte_grupo": True, "contraparte_nombre": True,
-                "instrumento": True, "indice_flotante": True, "direccion": True,
-                "moneda_recibe": True, "moneda_entrega": True,
-                "periodo_informacion": True, "fecha_operacion": True,
-                "fecha_vencimiento": True, "tenor_anios": ":.2f",
-                "tasa_fija": ":.4f", "tasa_precio_mercado": ":.4f",
-                "spread_patas_pb": ":.1f", "nocional_mm": ":,.0f",
-                "mtm_neto_m": ":,.0f", "clasificacion_riesgo": True,
-                "nocional_m": False,
-            })
-        fig.update_layout(height=580, margin=dict(l=8, r=8, t=30, b=8),
+                "folio_operacion": True, "aseguradora": True,
+                "contraparte_grupo": True, "indice_flotante": True,
+                "direccion": True, "periodo_informacion": True,
+                "tenor_anios": ":.2f", "tasa_fija": ":.3f",
+                "tasa_precio_mercado": ":.3f", "spread_vs_mercado_pb": ":.1f",
+                "nocional_mm": ":,.0f", "mtm_neto_m": ":,.0f",
+                "fecha_vencimiento": True, "nocional_m": False})
+        fig.update_layout(height=560, margin=dict(l=8, r=8, t=30, b=8),
                           legend=dict(orientation="h", y=-0.18))
         fig.update_xaxes(tickformat=",.1f")
         fig.update_yaxes(tickformat=".2f", title_text="Tasa fija (%)")
-        st.plotly_chart(fig, width="stretch", key="vista_tasas_g6")
-        st.caption(f"{len(curva):,} operaciones en la curva. El tamano del punto es el "
-                   f"nocional en MM$.")
+        st.plotly_chart(fig, width="stretch", key="irs_curva")
+        st.caption(f"{len(curva):,} operaciones. El tamano del punto es el nocional "
+                   f"en MM$. Spread positivo = la tasa pactada esta sobre mercado.")
 
-    st.markdown("**Direccionalidad por contraparte**")
+    st.markdown("**Direccionalidad por contraparte** (MM$)")
     piv = (d.assign(noc=a_mm(d.nocional_m.fillna(0)))
              .pivot_table(index="contraparte_grupo", columns="direccion",
                           values="noc", aggfunc="sum", fill_value=0))
     if not piv.empty:
-        # Ordena por exposicion total del banco, no por una direccion en
-        # particular: cual existe depende de los filtros.
         piv = piv.loc[piv.sum(axis=1).sort_values(ascending=False).index]
     st.dataframe(piv.round(0), width="stretch", column_config=tabla_miles(piv))
 
-    with st.expander("Detalle de operaciones", expanded=True):
-        cols = ["periodo_informacion", "aseguradora", "contraparte_grupo", "instrumento",
-                "direccion", "indice_flotante", "tenor_anios", "tasa_fija",
-                "tasa_precio_mercado", "spread_patas_pb", "nocional_m", "mtm_neto_m",
-                "folio_operacion", "fecha_vencimiento"]
-        det = d[[c for c in cols if c in d.columns]].copy()
-        det["nocional_m"] = a_mm(det.nocional_m)
-        det = det.rename(columns={"nocional_m": "nocional_mm", "periodo_informacion": "periodo"})
-        st.dataframe(det.sort_values("nocional_mm", ascending=False),
-                     width="stretch", hide_index=True, column_config=tabla_miles(det))
+    _tabla_detalle(
+        d,
+        ["periodo_informacion", "aseguradora", "contraparte_grupo", "instrumento",
+         "indice_flotante", "direccion", "tenor_anios", "tasa_fija",
+         "tasa_precio_mercado", "spread_vs_mercado_pb", "nocional_m", "mtm_neto_m",
+         "folio_operacion", "fecha_vencimiento"],
+        {"tasa_precio_mercado": "tasa_mercado", "spread_vs_mercado_pb": "spread_pb"},
+        "Detalle IRS", "irs.csv", key="dl_irs")
 
 
-def vista_fx_ccs(f: dict) -> None:
-    st.subheader("FX y Cross Currency — Mapa de monedas")
-    st.caption("Quien entrega que moneda y recibe cual. En un CCS la posicion larga "
-               "es la que la compania recibe; la corta, la que entrega.")
+def _panel_forward_uf(d) -> None:
+    """Forward de UF: seguro de inflacion. Se analiza por precio, no por tasa."""
+    if d.empty:
+        st.info("Sin forwards de UF para estos filtros."); return
 
-    df = _con_cortos(_base_clasificada(f, ("FX / CCS",)))
+    d = d.assign(dif_uf=d.tasa_precio_mercado - d.tasa_precio_contrato)
+    c = st.columns(4)
+    c[0].metric("Operaciones", f"{len(d):,}")
+    c[1].metric("Nocional (MM$)", f"{a_mm(d.nocional_m.fillna(0)).sum():,.0f}")
+    c[2].metric("Unidades UF", f"{d.unidades_uf.fillna(0).sum():,.0f}"
+                if "unidades_uf" in d.columns else "s/d")
+    c[3].metric("MTM neto (M$)", f"{d.mtm_neto_m.fillna(0).sum():,.0f}")
+
+    st.caption("Un forward de UF no tiene tasa fija ni pata flotante: se pacta un "
+               "nivel de UF a futuro. Por eso se mira precio pactado contra precio "
+               "de mercado, y no una curva de tasas.")
+
+    g = d[d.tenor_anios.notna() & d.tasa_precio_contrato.notna()]
+    if not g.empty:
+        g = g.assign(nocional_mm=a_mm(g.nocional_m.fillna(0)).abs())
+        fig = px.scatter(
+            g, x="tenor_anios", y="tasa_precio_contrato", color="contraparte_grupo",
+            size=g.nocional_mm + 1, size_max=24, opacity=0.8,
+            labels={"tenor_anios": "Tenor (anios)",
+                    "tasa_precio_contrato": "UF pactada (pesos por UF)",
+                    "contraparte_grupo": "Contraparte"},
+            hover_data={"folio_operacion": True, "aseguradora": True,
+                        "periodo_informacion": True, "tenor_anios": ":.2f",
+                        "tasa_precio_contrato": ":,.2f",
+                        "tasa_precio_mercado": ":,.2f", "dif_uf": ":,.2f",
+                        "unidades_uf": ":,.0f", "nocional_mm": ":,.0f",
+                        "mtm_neto_m": ":,.0f", "fecha_vencimiento": True,
+                        "nocional_m": False})
+        fig.update_layout(height=520, margin=dict(l=8, r=8, t=30, b=8),
+                          legend=dict(orientation="h", y=-0.2))
+        fig.update_yaxes(tickformat=",.0f")
+        fig.update_xaxes(tickformat=",.1f")
+        st.plotly_chart(fig, width="stretch", key="fwduf_curva")
+        st.caption("La curva ascendente es la UF proyectada: a mayor plazo, mayor "
+                   "nivel pactado, porque incorpora la inflacion esperada.")
+
+    _tabla_detalle(
+        d,
+        ["periodo_informacion", "aseguradora", "contraparte_grupo", "tenor_anios",
+         "tasa_precio_contrato", "tasa_precio_mercado", "dif_uf", "unidades_uf",
+         "nocional_m", "mtm_neto_m", "folio_operacion", "fecha_vencimiento"],
+        {"tasa_precio_contrato": "uf_pactada", "tasa_precio_mercado": "uf_mercado"},
+        "Detalle Forward UF", "forward_uf.csv", key="dl_fwduf")
+
+
+def vista_tasas(f: dict) -> None:
+    st.subheader("Tasas")
+    df = _con_cortos(_base_clasificada(f, ("TASAS",)))
     if df.empty:
-        st.info("Sin operaciones de FX o CCS para estos filtros."); return
+        st.info("Sin operaciones de tasa para estos filtros."); return
+
+    # Cada familia va en su propia pestana: un IRS se analiza por tasa y un
+    # forward de UF por precio, y no comparten ni una sola metrica.
+    n_irs = int(df.instrumento.str.startswith("IRS").sum())
+    n_fwd = int((df.instrumento == "Forward UF").sum())
+    t = st.tabs([f"IRS ({n_irs:,})", f"Forward UF — inflacion ({n_fwd:,})"])
+    with t[0]:
+        _panel_irs(df[df.instrumento.str.startswith("IRS")])
+    with t[1]:
+        _panel_forward_uf(df[df.instrumento == "Forward UF"])
+
+
+def _panel_ccs(d) -> None:
+    """Cross currency: se analiza por cruce de monedas y direccion del flujo."""
+    if d.empty:
+        st.info("Sin CCS para estos filtros."); return
 
     c = st.columns(4)
-    c[0].metric("Operaciones", f"{len(df):,}")
-    c[1].metric("Nocional (MM$)", f"{a_mm(df.nocional_m.fillna(0)).sum():,.0f}")
-    c[2].metric("Cruces distintos", f"{df.cruce_monedas.nunique()}")
-    c[3].metric("Contrapartes", f"{df.contraparte_grupo.nunique()}")
+    c[0].metric("Operaciones", f"{len(d):,}")
+    c[1].metric("Nocional (MM$)", f"{a_mm(d.nocional_m.fillna(0)).sum():,.0f}")
+    c[2].metric("Cruces distintos", f"{d.cruce_monedas.nunique()}")
+    c[3].metric("Contrapartes", f"{d.contraparte_grupo.nunique()}")
 
-    instrumentos = sorted(df.instrumento.dropna().unique())
-    sel = st.multiselect("Instrumento", instrumentos, default=instrumentos)
-    d = df[df.instrumento.isin(sel)] if sel else df
-
-    # --- Sankey de flujos de moneda -----------------------------------------
     st.markdown("**Flujo de monedas** — entrega (izquierda) hacia recibe (derecha)")
     flujo = (d[d.moneda_entrega.notna() & d.moneda_recibe.notna()]
              .assign(noc=lambda x: a_mm(x.nocional_m.fillna(0)).abs())
@@ -1362,13 +1431,12 @@ def vista_fx_ccs(f: dict) -> None:
                                "%{value:,.0f} MM$ en %{customdata[2]:,} operaciones"
                                "<extra></extra>"),
                 color="rgba(21,101,192,.28)")))
-        fig.update_layout(height=460, margin=dict(l=8, r=8, t=24, b=8),
+        fig.update_layout(height=440, margin=dict(l=8, r=8, t=24, b=8),
                           font=dict(size=13))
-        st.plotly_chart(fig, width="stretch", key="vista_fx_ccs_g7")
-        st.caption("El ancho es nocional en MM$. Un flujo grueso hacia la derecha en "
-                   "USD significa demanda neta de dolares de la plaza aseguradora.")
+        st.plotly_chart(fig, width="stretch", key="ccs_sankey")
+        st.caption("El ancho es nocional en MM$. Un flujo grueso hacia USD significa "
+                   "demanda neta de dolares de la plaza aseguradora.")
 
-    c1, c2 = st.columns(2)
     porcruce = (d.assign(noc=a_mm(d.nocional_m.fillna(0)))
                   .groupby("instrumento", as_index=False)
                   .agg(nocional_mm=("noc", "sum"), ops=("folio_operacion", "count"))
@@ -1376,29 +1444,64 @@ def vista_fx_ccs(f: dict) -> None:
     fig2 = px.bar(porcruce, x="instrumento", y="nocional_mm", text_auto=",.0f",
                   labels={"instrumento": "", "nocional_mm": "Nocional (MM$)"})
     eje_mm(fig2.update_layout(height=380, margin=dict(t=28)))
-    c1.plotly_chart(fig2, width="stretch", key="fxccs_por_instrumento")
+    st.plotly_chart(fig2, width="stretch", key="ccs_por_cruce")
 
-    porbanco = (d.assign(noc=a_mm(d.nocional_m.fillna(0)))
-                  .groupby(["contraparte_grupo", "instrumento"], as_index=False)
-                  .agg(nocional_mm=("noc", "sum")))
-    fig3 = px.bar(porbanco, x="contraparte_grupo", y="nocional_mm", color="instrumento",
-                  barmode="stack", labels={"contraparte_grupo": "",
-                                           "nocional_mm": "Nocional (MM$)"})
-    eje_mm(fig3.update_layout(height=380, margin=dict(t=28),
-                              legend=dict(orientation="h", y=-0.35)))
-    c2.plotly_chart(fig3, width="stretch", key="fxccs_por_banco")
+    _tabla_detalle(
+        d,
+        ["periodo_informacion", "aseguradora", "contraparte_grupo", "instrumento",
+         "cruce_monedas", "moneda_entrega", "moneda_recibe", "direccion",
+         "tenor_anios", "tipo_cambio_contrato", "tipo_cambio_mercado",
+         "nocional_m", "mtm_neto_m", "folio_operacion", "fecha_vencimiento"],
+        {"tipo_cambio_contrato": "tc_pactado", "tipo_cambio_mercado": "tc_mercado"},
+        "Detalle CCS", "ccs.csv", key="dl_ccs")
 
-    with st.expander("Detalle de operaciones", expanded=True):
-        cols = ["periodo_informacion", "aseguradora", "contraparte_grupo", "instrumento",
-                "cruce_monedas", "moneda_entrega", "moneda_recibe", "tenor_anios",
-                "tipo_cambio_contrato", "tipo_cambio_mercado", "nocional_m",
-                "mtm_neto_m", "folio_operacion", "fecha_vencimiento"]
-        det = d[[c for c in cols if c in d.columns]].copy()
-        det["nocional_m"] = a_mm(det.nocional_m)
-        det = det.rename(columns={"nocional_m": "nocional_mm",
-                                  "periodo_informacion": "periodo"})
-        st.dataframe(det.sort_values("nocional_mm", ascending=False),
-                     width="stretch", hide_index=True, column_config=tabla_miles(det))
+
+def _panel_forward_fx(d) -> None:
+    """Forward FX: precio pactado contra precio de mercado, por moneda."""
+    if d.empty:
+        st.info("Sin forwards FX para estos filtros."); return
+
+    d = d.assign(dif_precio=d.tasa_precio_mercado - d.tasa_precio_contrato)
+    c = st.columns(4)
+    c[0].metric("Operaciones", f"{len(d):,}")
+    c[1].metric("Nocional (MM$)", f"{a_mm(d.nocional_m.fillna(0)).sum():,.0f}")
+    c[2].metric("Monedas", f"{d.moneda.nunique()}")
+    c[3].metric("MTM neto (M$)", f"{d.mtm_neto_m.fillna(0).sum():,.0f}")
+
+    pormoneda = (d.assign(noc=a_mm(d.nocional_m.fillna(0)))
+                   .groupby(["instrumento", "contraparte_grupo"], as_index=False)
+                   .agg(nocional_mm=("noc", "sum")))
+    fig = px.bar(pormoneda, x="instrumento", y="nocional_mm", color="contraparte_grupo",
+                 barmode="stack",
+                 labels={"instrumento": "", "nocional_mm": "Nocional (MM$)",
+                         "contraparte_grupo": "Contraparte"})
+    eje_mm(fig.update_layout(height=400, margin=dict(t=28),
+                             legend=dict(orientation="h", y=-0.3)))
+    st.plotly_chart(fig, width="stretch", key="fwdfx_por_moneda")
+
+    _tabla_detalle(
+        d,
+        ["periodo_informacion", "aseguradora", "contraparte_grupo", "instrumento",
+         "moneda", "tipo_operacion", "tenor_anios", "tasa_precio_contrato",
+         "tasa_precio_mercado", "dif_precio", "nocional_m", "mtm_neto_m",
+         "folio_operacion", "fecha_vencimiento"],
+        {"tasa_precio_contrato": "precio_pactado", "tasa_precio_mercado": "precio_mercado"},
+        "Detalle Forward FX", "forward_fx.csv", key="dl_fwdfx")
+
+
+def vista_fx_ccs(f: dict) -> None:
+    st.subheader("FX y Cross Currency")
+    df = _con_cortos(_base_clasificada(f, ("FX / CCS",)))
+    if df.empty:
+        st.info("Sin operaciones de FX o CCS para estos filtros."); return
+
+    es_ccs = df.instrumento.str.startswith("CCS")
+    n_ccs, n_fwd = int(es_ccs.sum()), int((~es_ccs).sum())
+    t = st.tabs([f"Cross Currency Swaps ({n_ccs:,})", f"Forwards FX ({n_fwd:,})"])
+    with t[0]:
+        _panel_ccs(df[es_ccs])
+    with t[1]:
+        _panel_forward_fx(df[~es_ccs])
 
 
 def vista_renta_fija(f: dict) -> None:
