@@ -392,6 +392,18 @@ def construir_sidebar() -> dict:
         f["tipo_instrumento"] = st.multiselect("Tipo de instrumento", ti, default=ti)
         f["_tipo_instrumento_all"] = ti
 
+        # Emisor: el analogo de la contraparte en renta fija. Un bono no tiene
+        # contraparte, tiene quien lo emitio. El nombre no lo publica B.1
+        # --solo el RUT-- asi que sale de dim_emisor; ver _crear_dim_emisor.
+        eg = valores("v_renta_fija_clasificada", "emisor_grupo")
+        if eg:
+            f["emisor_grupo"] = st.multiselect("Grupo emisor (renta fija)", eg, default=eg)
+            f["_emisor_grupo_all"] = eg
+        en = valores("v_renta_fija_clasificada", "emisor_nombre")
+        if en:
+            f["emisor_nombre"] = st.multiselect("Emisor (renta fija)", en, default=en)
+            f["_emisor_nombre_all"] = en
+
     # --- fechas y plazos ----------------------------------------------------
     with sb.expander("Fechas y plazos", expanded=False):
         for clave, tabla, col, etiqueta in [
@@ -543,6 +555,10 @@ def predicados_rf(f: dict, tabla: str = "fact_renta_fija",
         cl_in(t, C("unidad_monetaria"), f.get("unidades"), f.get("_unidades_all")),
         cl_in(t, C("clasificacion_riesgo"), f.get("clasif_riesgo_rf"), f.get("_clasif_riesgo_rf_all")),
         cl_in(t, C("clasificacion_inversion"), f.get("clasif_inversion"), f.get("_clasif_inversion_all")),
+        # Solo existen en la vista clasificada; sobre el hecho crudo cl_in los
+        # salta y lo avisa por _OMITIDOS.
+        cl_in(t, C("emisor_grupo"), f.get("emisor_grupo"), f.get("_emisor_grupo_all")),
+        cl_in(t, C("emisor_nombre"), f.get("emisor_nombre"), f.get("_emisor_nombre_all")),
         cl_in(t, C("veredicto"), f.get("veredictos"), f.get("_veredictos_all")),
         cl_fecha(t, C("fecha_emision"), f.get("f_emision"), f.get("_f_emision_tope")),
         cl_fecha(t, C("fecha_compra"), f.get("f_compra"), f.get("_f_compra_tope")),
@@ -2211,6 +2227,12 @@ _CAT_RF = (
      ("tipo_instrumento", "valor_final"), _g_rf_cat("tipo_instrumento", "")),
     ("rf_riesgo", "Valor por clasificacion de riesgo", None,
      ("clasificacion_riesgo", "valor_final"), _g_rf_cat("clasificacion_riesgo", "")),
+    # B.1 no publica el nombre del emisor: sale de dim_emisor. Estos dos solo
+    # se ofrecen sobre la vista clasificada, que es la que lo resuelve.
+    ("rf_emisor", "Valor por emisor", None,
+     ("emisor_nombre", "valor_final"), _g_rf_cat("emisor_nombre", "")),
+    ("rf_grupo", "Valor por grupo emisor", None,
+     ("emisor_grupo", "valor_final"), _g_rf_cat("emisor_grupo", "")),
     ("rf_curva", "TIR de mercado contra duracion", None,
      ("tir_mercado",), _g_rf_curva),
     ("rf_evol", "Evolucion del valor por periodo", None,

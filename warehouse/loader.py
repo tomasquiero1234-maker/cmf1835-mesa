@@ -1015,6 +1015,80 @@ CREATE OR REPLACE VIEW fact_cuarentena AS SELECT * FROM raw_cuarentena;
 """
 
 
+def _crear_dim_emisor(con) -> None:
+    """Identidad del emisor de renta fija local.
+
+    El anexo B.1 identifica al emisor SOLO por su RUT: el campo NOMBRE_DEUDOR
+    del layout viene vacio en el 100% de los registros. Sin esto el libro local
+    se lee como una lista de numeros y no se puede preguntar quien tiene papel
+    de quien.
+
+    Tres fuentes, todas publicadas, ninguna inventada:
+
+      entities   config/entities.yaml, nuestro catalogo vetado. Es la unica
+                 que aporta GRUPO economico, que es lo que permite agrupar
+                 igual que en derivados.
+      aseguradora dim_compania: las aseguradoras tambien emiten (mutuos,
+                 bonos), y su nombre lo publica la propia CMF en el anexo.
+      cmf        config/emisores_cmf.csv, nomina de emisores de valores de la
+                 CMF (ver utils.fetch_emisores).
+
+    El nombre preferido es la razon social oficial de la CMF, igual que en
+    derivados se guarda el nombre tal como lo publica el informante. El grupo
+    sale siempre de entities.yaml, porque es lo unico que sabe que dos RUT son
+    la misma casa matriz.
+
+    Lo que no resuelve queda con emisor_nombre NULL a proposito. Tesoreria
+    General, el Banco Central y algunas mutuarias no estan en el registro de
+    emisores de valores; el dashboard los muestra con su RUT y marcados.
+    Ponerles un nombre a mano seria inventar dato.
+    """
+    from utils.fetch_emisores import leer as leer_emisores
+
+    resolver = EntityResolver.from_yaml(ENTITIES)
+    nomina = leer_emisores()
+
+    # El DV va junto con el RUT: EntityResolver valida modulo 11 antes de
+    # aceptar la coincidencia, asi que sin DV ningun banco resuelve y el grupo
+    # economico queda vacio. El DV solo lo trae el hecho, no dim_instrumento.
+    ruts = con.execute(
+        "SELECT emisor_rut, ANY_VALUE(emisor_dv) FROM fact_renta_fija "
+        "WHERE emisor_rut IS NOT NULL GROUP BY emisor_rut").fetchall()
+    aseguradoras = dict(con.execute(
+        "SELECT rut_compania, nombre FROM dim_compania").fetchall())
+
+    filas = []
+    for rut_crudo, dv in ruts:
+        # emisor_rut viene DOUBLE del anexo. EntityResolver indexa por int y
+        # con un float devuelve None EN SILENCIO, asi que sin este cast
+        # ningun banco resuelve y el grupo economico queda vacio sin aviso.
+        rut = int(rut_crudo)
+        r = resolver.resolve(rut=rut, dv=dv)
+        ent = r.entity
+        nombre = nomina.get(rut) or aseguradoras.get(rut) or (ent.name if ent else None)
+        if nomina.get(rut):
+            fuente = "cmf"
+        elif aseguradoras.get(rut):
+            fuente = "aseguradora"
+        elif ent:
+            fuente = "entities"
+        else:
+            fuente = None
+        filas.append((rut, nombre, ent.group_key if ent else None,
+                      ent.kind if ent else None, fuente))
+
+    con.execute("CREATE OR REPLACE TABLE dim_emisor "
+                "(emisor_rut BIGINT, emisor_nombre VARCHAR, emisor_grupo VARCHAR, "
+                " emisor_tipo VARCHAR, emisor_fuente VARCHAR)")
+    if filas:
+        con.executemany("INSERT INTO dim_emisor VALUES (?, ?, ?, ?, ?)", filas)
+    con.execute("CREATE UNIQUE INDEX IF NOT EXISTS ix_dim_emisor ON dim_emisor(emisor_rut)")
+
+    con_nombre = sum(1 for f in filas if f[1])
+    _LOG.info("dim_emisor: %s RUT, %s con nombre (%.1f%%)",
+              len(filas), con_nombre, 100 * con_nombre / max(len(filas), 1))
+
+
 def construir_duckdb(out: Path, db: Path) -> dict[str, int]:
     """Crea el esquema estrella sobre el Parquet ya escrito."""
     import duckdb
@@ -1031,13 +1105,17 @@ def construir_duckdb(out: Path, db: Path) -> dict[str, int]:
 
     con.execute(DDL.format(root=out.as_posix()))
 
+    # Identidad del emisor de renta fija. Va entre el DDL y las vistas porque
+    # lee de dim_instrumento y dim_compania, y v_renta_fija_clasificada la usa.
+    _crear_dim_emisor(con)
+
     # Vistas de clasificacion: la clase de activo y el "apellido" de cada
     # instrumento. Van despues del DDL porque leen de los hechos.
     from warehouse.clases import SQL_CLASES
     con.execute(SQL_CLASES)
 
     conteos: dict[str, int] = {}
-    for t in ("fact_derivado", "fact_renta_fija", "fact_extranjero_rf", "fact_extranjero_rv",
+    for t in ("dim_emisor", "fact_derivado", "fact_renta_fija", "fact_extranjero_rf", "fact_extranjero_rv",
               "fact_equity", "fact_fondo", "fact_otras_inv", "fact_control",
               "fact_garantia", "fact_cuarentena",
               "dim_periodo", "dim_compania", "dim_contraparte", "dim_instrumento"):

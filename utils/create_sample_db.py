@@ -58,7 +58,7 @@ HECHOS = {
 
 #: Dimensiones: van completas, son chicas y recortarlas rompe los joins.
 DIMENSIONES = ("dim_periodo", "dim_compania", "dim_contraparte",
-               "dim_instrumento", "uf_cierre_mes")
+               "dim_instrumento", "dim_emisor", "uf_cierre_mes")
 
 
 def tablas_existentes(con) -> set[str]:

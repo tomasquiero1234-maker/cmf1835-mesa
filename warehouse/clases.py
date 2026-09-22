@@ -207,31 +207,37 @@ FROM base;
 -- ===========================================================================
 CREATE OR REPLACE VIEW v_renta_fija_clasificada AS
 SELECT
-    periodo_informacion, rut_compania, zip_origen, source_file, line_no,
+    f.periodo_informacion, f.rut_compania, f.zip_origen, f.source_file, f.line_no,
     'LOCAL'                                   AS ambito,
-    nemotecnico                               AS instrumento_id,
-    tipo_instrumento,
-    CAST(emisor_rut AS BIGINT)                AS emisor_rut,
-    NULL                                      AS emisor_nombre,
-    {_MONEDA.format(col='unidad_monetaria')}  AS moneda,
-    valor_final, tir_compra, tir_mercado, tasa_emision,
-    duracion_modificada_aprox                 AS duracion,
+    f.nemotecnico                             AS instrumento_id,
+    f.tipo_instrumento,
+    CAST(f.emisor_rut AS BIGINT)              AS emisor_rut,
+    -- B.1 identifica al emisor solo por RUT (NOMBRE_DEUDOR viene vacio en el
+    -- 100% de los registros), asi que el nombre sale de dim_emisor. Lo que no
+    -- resuelve queda NULL: el dashboard muestra el RUT y lo marca.
+    e.emisor_nombre                           AS emisor_nombre,
+    e.emisor_grupo                            AS emisor_grupo,
+    e.emisor_fuente                           AS emisor_fuente,
+    {_MONEDA.format(col='f.unidad_monetaria')} AS moneda,
+    f.valor_final, f.tir_compra, f.tir_mercado, f.tasa_emision,
+    f.duracion_modificada_aprox               AS duracion,
     'aproximada'                              AS duracion_origen,
-    fecha_vencimiento, clasificacion_riesgo, clasificacion_inversion,
+    f.fecha_vencimiento, f.clasificacion_riesgo, f.clasificacion_inversion,
     NULL                                      AS en_margen_o_pacto,
     -- Tesoreria (60805000) y Banco Central (60801000) emiten todos los BTU,
     -- BTP y BEC. Los codigos bancarios e hipotecarios salen del propio
     -- tipo_instrumento. Lo que no calza queda en Otros, sin forzar.
     CASE
-        WHEN emisor_rut IN (60805000, 60801000)        THEN 'Soberano'
-        WHEN tipo_instrumento IN ('BTU','BTP','BEC')   THEN 'Soberano'
-        WHEN tipo_instrumento IN ('BR')                THEN 'Soberano (reconocimiento)'
-        WHEN tipo_instrumento IN ('BB','BU','LH','DPB','PDBC') THEN 'Bancario'
-        WHEN tipo_instrumento IN ('MHA','MHB','CLEAS','MHE')   THEN 'Hipotecario / Leasing'
-        WHEN tipo_instrumento IN ('BE','BS','BEF','BVL','BNEE','BTU')  THEN 'Corporativo'
+        WHEN f.emisor_rut IN (60805000, 60801000)        THEN 'Soberano'
+        WHEN f.tipo_instrumento IN ('BTU','BTP','BEC')   THEN 'Soberano'
+        WHEN f.tipo_instrumento IN ('BR')                THEN 'Soberano (reconocimiento)'
+        WHEN f.tipo_instrumento IN ('BB','BU','LH','DPB','PDBC') THEN 'Bancario'
+        WHEN f.tipo_instrumento IN ('MHA','MHB','CLEAS','MHE')   THEN 'Hipotecario / Leasing'
+        WHEN f.tipo_instrumento IN ('BE','BS','BEF','BVL','BNEE','BTU')  THEN 'Corporativo'
         ELSE 'Otros'
     END AS segmento_emisor
-FROM fact_renta_fija
+FROM fact_renta_fija f
+LEFT JOIN dim_emisor e ON e.emisor_rut = f.emisor_rut
 
 UNION ALL BY NAME
 
@@ -241,7 +247,11 @@ SELECT
     isin                                      AS instrumento_id,
     tipo_instrumento,
     NULL                                      AS emisor_rut,
+    -- B.5 si publica el nombre del emisor extranjero, pero no un RUT ni un
+    -- grupo: no hay contra que resolverlo.
     emisor                                    AS emisor_nombre,
+    NULL                                      AS emisor_grupo,
+    'informado'                               AS emisor_fuente,
     {_MONEDA.format(col='moneda')}            AS moneda,
     valor_final, tir_compra, tir_mercado, tasa_emision,
     duracion                                  AS duracion,
