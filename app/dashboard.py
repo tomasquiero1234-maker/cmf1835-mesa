@@ -27,6 +27,11 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+# Se reusa el mapeo de moneda del warehouse (PROM -> USD, $$ -> CLP) en lugar
+# de copiarlo aqui: una copia dejaria los rotulos de los graficos mintiendo el
+# dia que el warehouse corrija el mapeo, y nada lo avisaria.
+from warehouse.clases import _MONEDA as SQL_MONEDA  # noqa: E402
+
 #: La base completa pesa mas de lo que admite un repositorio publico, asi que
 #: el despliegue viaja con una muestra de los ultimos meses. Se prefiere la
 #: base completa si esta; si no, la muestra. La variable de entorno gana sobre
@@ -1809,6 +1814,406 @@ def vista_copiloto(f: dict) -> None:
     st.rerun()
 
 
+# ---------------------------------------------------------------------------
+#  panel de graficos del explorador
+# ---------------------------------------------------------------------------
+#
+# Por que los graficos son por instrumento y no uno solo para todo: la columna
+# tasa_precio_contrato guarda cosas distintas segun el instrumento. Medianas
+# del ultimo periodo: 918,60 en un forward (un tipo de cambio CLP/USD), 1,14 en
+# un IRS (una tasa en %), 0,41 en un pacto (una tasa repo), 148,93 en una
+# opcion (un precio de ejercicio). En un mismo eje eso da un grafico que miente.
+#
+# Lo mismo con indice_flotante: figura poblado al 100%, pero en forwards,
+# pactos, opciones y futuros vale SIN_DETERMINAR en TODAS las filas, asi que un
+# "grafico por indice" ahi seria una sola barra sin informacion.
+#
+# De ahi la regla: cada grafico declara a que instrumentos aplica y que
+# columnas necesita pobladas. El que no se puede calcular no se ofrece, y se
+# dice por que. Lo agregado se calcula en DuckDB; solo los de dispersion
+# materializan filas, y acotadas.
+
+#: Tope de puntos en un grafico de dispersion. Ni el navegador ni el
+#: contenedor aguantan mas, y por encima de esto la nube de puntos ya no se lee.
+TOPE_PUNTOS = 3_000
+
+
+def _x_moneda(col: str) -> str:
+    """Codigo de moneda normalizado con el mapeo del warehouse."""
+    return SQL_MONEDA.format(col=col).strip()
+
+
+def _x_par(col: str) -> str:
+    """Par de monedas con ambas patas normalizadas: 'UF/PROM' -> 'UF/USD'."""
+    izq = _x_moneda(f"split_part({col}, '/', 1)")
+    der = _x_moneda(f"split_part({col}, '/', 2)")
+    return f"({izq} || '/' || {der})"
+
+
+def _x_mtm(tabla: str) -> str:
+    """MTM neto. La vista clasificada ya lo trae; el hecho crudo no."""
+    if "mtm_neto_m" in columnas(tabla):
+        return "COALESCE(d.mtm_neto_m, 0)"
+    return "(COALESCE(d.mtm_activo_m, 0) - COALESCE(d.mtm_pasivo_m, 0))"
+
+
+def _x_tenor(tabla: str) -> str:
+    """Tenor en anios. Idem: la vista lo trae, el hecho crudo se calcula."""
+    if "tenor_anios" in columnas(tabla):
+        return "d.tenor_anios"
+    return ("DATE_DIFF('day', LAST_DAY(STRPTIME(CAST(d.periodo_informacion AS VARCHAR)"
+            "|| '01', '%Y%m%d')), d.fecha_vencimiento) / 365.25")
+
+
+def _y(where: str, cond: str) -> str:
+    """Agrega una condicion a un WHERE ya armado (que puede venir vacio)."""
+    if not cond:
+        return where
+    return where + (" AND " if where.strip() else " WHERE ") + cond
+
+
+def _aviso_tope(df, tope: int) -> None:
+    if len(df) >= tope:
+        st.caption(f"Se grafican las {tope:,} operaciones de mayor nocional. "
+                   f"Los graficos de barras de arriba si agregan sobre todo el filtro.")
+
+
+# --- graficos comunes a cualquier instrumento ------------------------------
+
+def _g_noc_cp(tabla, where, clave):
+    df = q(f"""SELECT d.contraparte_grupo AS grupo,
+                      sum(d.nocional_m) / {M_A_MM} AS nocional_mm,
+                      count(*) AS operaciones
+               FROM {tabla} d {where} GROUP BY 1
+               ORDER BY nocional_mm DESC NULLS LAST LIMIT 20""")
+    if df.empty:
+        st.info("Sin datos para graficar."); return
+    fig = px.bar(df, x="grupo", y="nocional_mm", text_auto=",.0f",
+                 hover_data={"operaciones": ":,"},
+                 labels={"grupo": "", "nocional_mm": "Nocional (MM$)"})
+    eje_mm(fig.update_layout(height=420, margin=dict(t=28)))
+    st.plotly_chart(fig, width="stretch", key=f"expl_g_{clave}")
+
+
+def _g_mtm_cp(tabla, where, clave):
+    mtm = _x_mtm(tabla)
+    df = q(f"""SELECT d.contraparte_grupo AS grupo, sum({mtm}) / {M_A_MM} AS mtm_mm
+               FROM {tabla} d {where} GROUP BY 1
+               ORDER BY abs(sum({mtm})) DESC NULLS LAST LIMIT 20""")
+    if df.empty:
+        st.info("Sin datos para graficar."); return
+    df["posicion"] = ["A favor" if v >= 0 else "En contra" for v in df.mtm_mm]
+    fig = px.bar(df, x="grupo", y="mtm_mm", color="posicion", text_auto=",.0f",
+                 color_discrete_map={"A favor": "#2e7d32", "En contra": "#c62828"},
+                 labels={"grupo": "", "mtm_mm": "MTM neto (MM$)"})
+    eje_mm(fig.update_layout(height=420, margin=dict(t=28)), titulo="MTM neto (MM$)")
+    st.plotly_chart(fig, width="stretch", key=f"expl_g_{clave}")
+
+
+def _g_tramo(tabla, where, clave):
+    t = _x_tenor(tabla)
+    df = q(f"""SELECT CASE WHEN {t} < 0 THEN 'vencido' WHEN {t} < 0.25 THEN '0-3m'
+                           WHEN {t} < 1 THEN '3-12m'  WHEN {t} < 2 THEN '1-2a'
+                           WHEN {t} < 5 THEN '2-5a'   WHEN {t} < 10 THEN '5-10a'
+                           ELSE '10a+' END AS tramo,
+                      CASE WHEN {t} < 0 THEN 0 WHEN {t} < 0.25 THEN 1
+                           WHEN {t} < 1 THEN 2 WHEN {t} < 2 THEN 3
+                           WHEN {t} < 5 THEN 4 WHEN {t} < 10 THEN 5 ELSE 6 END AS orden,
+                      sum(d.nocional_m) / {M_A_MM} AS nocional_mm, count(*) AS operaciones
+               FROM {tabla} d {_y(where, f"{t} IS NOT NULL")}
+               GROUP BY 1, 2 ORDER BY orden""")
+    if df.empty:
+        st.info("Sin vencimientos calculables para este filtro."); return
+    fig = px.bar(df, x="tramo", y="nocional_mm", text_auto=",.0f",
+                 hover_data={"operaciones": ":,", "orden": False},
+                 labels={"tramo": "", "nocional_mm": "Nocional (MM$)"})
+    eje_mm(fig.update_layout(height=420, margin=dict(t=28)))
+    st.plotly_chart(fig, width="stretch", key=f"expl_g_{clave}")
+
+
+def _g_evol(tabla, where, clave):
+    df = q(f"""SELECT CAST(d.periodo_informacion AS VARCHAR) AS periodo,
+                      sum(d.nocional_m) / {M_A_MM} AS nocional_mm, count(*) AS operaciones
+               FROM {tabla} d {where} GROUP BY 1 ORDER BY 1""")
+    if len(df) < 2:
+        st.info("Se necesita mas de un periodo seleccionado en el sidebar."); return
+    fig = px.line(df, x="periodo", y="nocional_mm", markers=True,
+                  hover_data={"operaciones": ":,"},
+                  labels={"periodo": "", "nocional_mm": "Nocional (MM$)"})
+    eje_mm(fig.update_layout(height=420, margin=dict(t=28)))
+    st.plotly_chart(fig, width="stretch", key=f"expl_g_{clave}")
+
+
+# --- graficos propios de cada instrumento ----------------------------------
+
+def _g_curva(tabla, where, clave):
+    """Tasa fija contra tenor: la curva que cotiza la mesa, por indice."""
+    t = _x_tenor(tabla)
+    ind = ("d.indice_flotante" if "indice_flotante" in columnas(tabla)
+           else "'(sin indice en esta tabla)'")
+    df = q(f"""SELECT {t} AS tenor_anios, d.tasa_fija, {ind} AS indice,
+                      d.contraparte_grupo, d.nocional_m / {M_A_MM} AS nocional_mm
+               FROM {tabla} d {_y(where, "d.tasa_fija IS NOT NULL")}
+               ORDER BY d.nocional_m DESC NULLS LAST LIMIT {TOPE_PUNTOS}""")
+    if df.empty:
+        st.info("Ninguna operacion del filtro tiene tasa fija informada."); return
+    fig = px.scatter(df, x="tenor_anios", y="tasa_fija", color="indice",
+                     size=df.nocional_mm.abs() + 1, size_max=22, opacity=0.75,
+                     hover_data={"contraparte_grupo": True, "nocional_mm": ":,.0f"},
+                     labels={"tenor_anios": "Tenor (anios)", "tasa_fija": "Tasa fija (%)"})
+    fig.update_layout(height=480, margin=dict(t=28),
+                      legend=dict(orientation="h", y=-0.2))
+    st.plotly_chart(fig, width="stretch", key=f"expl_g_{clave}")
+    _aviso_tope(df, TOPE_PUNTOS)
+
+
+def _g_rol(tabla, where, clave):
+    df = q(f"""SELECT d.rol_tasa_fija AS rol, sum(d.nocional_m) / {M_A_MM} AS nocional_mm,
+                      count(*) AS operaciones
+               FROM {tabla} d {_y(where, "d.rol_tasa_fija IS NOT NULL")}
+               GROUP BY 1 ORDER BY 2 DESC NULLS LAST""")
+    if df.empty:
+        st.info("Ninguna operacion del filtro informa el rol de la tasa fija."); return
+    fig = px.bar(df, x="rol", y="nocional_mm", color="rol", text_auto=",.0f",
+                 hover_data={"operaciones": ":,"},
+                 labels={"rol": "", "nocional_mm": "Nocional (MM$)"})
+    eje_mm(fig.update_layout(height=420, margin=dict(t=28), showlegend=False))
+    st.plotly_chart(fig, width="stretch", key=f"expl_g_{clave}")
+
+
+def _g_cruce(tabla, where, clave):
+    par = _x_par("d.par_monedas")
+    df = q(f"""SELECT {par} AS cruce, sum(d.nocional_m) / {M_A_MM} AS nocional_mm,
+                      count(*) AS operaciones
+               FROM {tabla} d {_y(where, "d.par_monedas IS NOT NULL")}
+               GROUP BY 1 ORDER BY 2 DESC NULLS LAST LIMIT 20""")
+    if df.empty:
+        st.info("Ninguna operacion del filtro informa par de monedas."); return
+    fig = px.bar(df, x="cruce", y="nocional_mm", text_auto=",.0f",
+                 hover_data={"operaciones": ":,"},
+                 labels={"cruce": "", "nocional_mm": "Nocional (MM$)"})
+    eje_mm(fig.update_layout(height=420, margin=dict(t=28)))
+    st.plotly_chart(fig, width="stretch", key=f"expl_g_{clave}")
+
+
+def _g_desvio_fwd(tabla, where, clave):
+    """Desvio del precio pactado contra el de mercado, en %.
+
+    Es el unico eje comparable entre pares distintos: el precio crudo de un
+    forward CLP/USD ronda 918 y el de uno en EUR no comparte escala, pero el
+    desvio relativo contra el mercado si se puede poner en el mismo grafico.
+    """
+    t = _x_tenor(tabla)
+    mon = _x_moneda("d.moneda")
+    cond = "d.tasa_precio_mercado > 0 AND d.tasa_precio_contrato > 0"
+    df = q(f"""SELECT {t} AS tenor_anios, {mon} AS moneda,
+                      100 * (d.tasa_precio_contrato / d.tasa_precio_mercado - 1) AS desvio_pct,
+                      d.nocional_m / {M_A_MM} AS nocional_mm, d.contraparte_grupo
+               FROM {tabla} d {_y(where, cond)}
+               ORDER BY d.nocional_m DESC NULLS LAST LIMIT {TOPE_PUNTOS}""")
+    if df.empty:
+        st.info("Ninguna operacion del filtro tiene precio pactado y de mercado "
+                "para comparar."); return
+    fig = px.scatter(df, x="tenor_anios", y="desvio_pct", color="moneda",
+                     size=df.nocional_mm.abs() + 1, size_max=22, opacity=0.75,
+                     hover_data={"contraparte_grupo": True, "nocional_mm": ":,.0f",
+                                 "desvio_pct": ":.2f"},
+                     labels={"tenor_anios": "Tenor (anios)",
+                             "desvio_pct": "Pactado contra mercado (%)"})
+    fig.add_hline(y=0, line_dash="dot", line_color="#888")
+    fig.update_layout(height=480, margin=dict(t=28),
+                      legend=dict(orientation="h", y=-0.2))
+    st.plotly_chart(fig, width="stretch", key=f"expl_g_{clave}")
+    st.caption("Sobre cero, el contrato quedo pactado por encima del mercado; "
+               "bajo cero, por debajo. El tamano es el nocional.")
+    _aviso_tope(df, TOPE_PUNTOS)
+
+
+def _g_pacto(tabla, where, clave):
+    t = _x_tenor(tabla)
+    df = q(f"""SELECT {t} AS tenor_anios, d.tasa_precio_contrato AS tasa,
+                      d.nocional_m / {M_A_MM} AS nocional_mm, d.contraparte_grupo,
+                      {_x_moneda('d.moneda')} AS moneda
+               FROM {tabla} d {_y(where, "d.tasa_precio_contrato IS NOT NULL")}
+               ORDER BY d.nocional_m DESC NULLS LAST LIMIT {TOPE_PUNTOS}""")
+    if df.empty:
+        st.info("Ningun pacto del filtro informa tasa."); return
+    fig = px.scatter(df, x="tenor_anios", y="tasa", color="moneda",
+                     size=df.nocional_mm.abs() + 1, size_max=22, opacity=0.75,
+                     hover_data={"contraparte_grupo": True, "nocional_mm": ":,.0f"},
+                     labels={"tenor_anios": "Plazo (anios)", "tasa": "Tasa del pacto (%)"})
+    fig.update_layout(height=480, margin=dict(t=28),
+                      legend=dict(orientation="h", y=-0.2))
+    st.plotly_chart(fig, width="stretch", key=f"expl_g_{clave}")
+    _aviso_tope(df, TOPE_PUNTOS)
+
+
+# --- graficos de renta fija ------------------------------------------------
+
+def _g_rf_cat(col, rotulo):
+    def fn(tabla, where, clave):
+        df = q(f"""SELECT d.{col} AS cat, sum(d.valor_final) / {M_A_MM} AS valor_mm,
+                          count(*) AS papeles
+                   FROM {tabla} d {_y(where, f"d.{col} IS NOT NULL")}
+                   GROUP BY 1 ORDER BY 2 DESC NULLS LAST LIMIT 25""")
+        if df.empty:
+            st.info("Sin datos para graficar."); return
+        fig = px.bar(df, x="cat", y="valor_mm", text_auto=",.0f",
+                     hover_data={"papeles": ":,"},
+                     labels={"cat": rotulo, "valor_mm": "Valor final (MM$)"})
+        eje_mm(fig.update_layout(height=420, margin=dict(t=28)),
+               titulo="Valor final (MM$)")
+        st.plotly_chart(fig, width="stretch", key=f"expl_g_{clave}")
+    return fn
+
+
+def _g_rf_curva(tabla, where, clave):
+    cs = columnas(tabla)
+    dur = "d.duracion" if "duracion" in cs else "d.duracion_modificada_aprox"
+    seg = "d.segmento_emisor" if "segmento_emisor" in cs else "d.tipo_instrumento"
+    # La vista clasificada llama instrumento_id a lo que el hecho crudo llama
+    # nemotecnico: son la misma columna con dos nombres.
+    ide = "d.instrumento_id" if "instrumento_id" in cs else "d.nemotecnico"
+    df = q(f"""SELECT {dur} AS duracion, d.tir_mercado, {seg} AS segmento,
+                      d.valor_final / {M_A_MM} AS valor_mm, {ide} AS instrumento_id
+               FROM {tabla} d
+               {_y(where, f"{dur} IS NOT NULL AND d.tir_mercado IS NOT NULL")}
+               ORDER BY d.valor_final DESC NULLS LAST LIMIT {TOPE_PUNTOS}""")
+    if df.empty:
+        st.info("Ningun papel del filtro tiene duracion y TIR de mercado."); return
+    fig = px.scatter(df, x="duracion", y="tir_mercado", color="segmento",
+                     size=df.valor_mm.abs() + 1, size_max=22, opacity=0.75,
+                     hover_data={"instrumento_id": True, "valor_mm": ":,.0f"},
+                     labels={"duracion": "Duracion (anios)",
+                             "tir_mercado": "TIR de mercado (%)"})
+    fig.update_layout(height=480, margin=dict(t=28),
+                      legend=dict(orientation="h", y=-0.2))
+    st.plotly_chart(fig, width="stretch", key=f"expl_g_{clave}")
+    _aviso_tope(df, TOPE_PUNTOS)
+
+
+def _g_rf_evol(tabla, where, clave):
+    df = q(f"""SELECT CAST(d.periodo_informacion AS VARCHAR) AS periodo,
+                      sum(d.valor_final) / {M_A_MM} AS valor_mm, count(*) AS papeles
+               FROM {tabla} d {where} GROUP BY 1 ORDER BY 1""")
+    if len(df) < 2:
+        st.info("Se necesita mas de un periodo seleccionado en el sidebar."); return
+    fig = px.line(df, x="periodo", y="valor_mm", markers=True,
+                  hover_data={"papeles": ":,"},
+                  labels={"periodo": "", "valor_mm": "Valor final (MM$)"})
+    eje_mm(fig.update_layout(height=420, margin=dict(t=28)), titulo="Valor final (MM$)")
+    st.plotly_chart(fig, width="stretch", key=f"expl_g_{clave}")
+
+
+#: (clave, titulo, subtipos a los que aplica o None, columnas necesarias, fn).
+#: 'columnas necesarias' se exige presente Y con datos en el filtro vigente.
+_CAT_DERIV = (
+    ("noc_cp", "Nocional por contraparte", None,
+     ("contraparte_grupo", "nocional_m"), _g_noc_cp),
+    ("mtm_cp", "MTM neto por contraparte", None,
+     ("contraparte_grupo", "mtm_activo_m"), _g_mtm_cp),
+    ("tramo", "Nocional por tramo de vencimiento", None,
+     ("fecha_vencimiento", "nocional_m"), _g_tramo),
+    ("evol", "Evolucion del nocional por periodo", None,
+     ("periodo_informacion", "nocional_m"), _g_evol),
+    ("curva", "Curva: tasa fija contra tenor", ("IRS", "CCS"),
+     ("tasa_fija",), _g_curva),
+    ("rol", "Paga fija contra recibe fija", ("IRS", "CCS"),
+     ("rol_tasa_fija",), _g_rol),
+    ("cruce", "Nocional por cruce de monedas", ("CCS", "IRS"),
+     ("par_monedas",), _g_cruce),
+    ("fwd", "Precio pactado contra mercado", ("FORWARD",),
+     ("tasa_precio_contrato", "tasa_precio_mercado"), _g_desvio_fwd),
+    ("pacto", "Tasa contra plazo", ("PACTO",),
+     ("tasa_precio_contrato",), _g_pacto),
+)
+
+_CAT_RF = (
+    ("rf_seg", "Valor por segmento de emisor", None,
+     ("segmento_emisor", "valor_final"), _g_rf_cat("segmento_emisor", "")),
+    ("rf_tipo", "Valor por tipo de instrumento", None,
+     ("tipo_instrumento", "valor_final"), _g_rf_cat("tipo_instrumento", "")),
+    ("rf_riesgo", "Valor por clasificacion de riesgo", None,
+     ("clasificacion_riesgo", "valor_final"), _g_rf_cat("clasificacion_riesgo", "")),
+    ("rf_curva", "TIR de mercado contra duracion", None,
+     ("tir_mercado",), _g_rf_curva),
+    ("rf_evol", "Evolucion del valor por periodo", None,
+     ("periodo_informacion", "valor_final"), _g_rf_evol),
+)
+
+
+def _cobertura(tabla: str, where: str, cols) -> dict:
+    """Cuantas filas tienen dato en cada columna, dentro del filtro vigente.
+
+    Se mira el dato y no solo la existencia de la columna: indice_flotante
+    existe para un forward, pero vale SIN_DETERMINAR en el 100% de las filas.
+    """
+    presentes = [c for c in cols if c in columnas(tabla)]
+    if not presentes:
+        return {}
+    sel = ", ".join(f"count(d.{c}) AS {c}" for c in presentes)
+    r = q(f"SELECT {sel} FROM {tabla} d {where}")
+    return {c: int(r[c][0]) for c in presentes} if not r.empty else {}
+
+
+def panel_graficos(tabla: str, where: str) -> None:
+    """Graficos del explorador, elegidos segun el instrumento que se mira."""
+    if tabla in ("fact_derivado", "v_derivado_clasificado"):
+        catalogo, con_subtipo = _CAT_DERIV, "subtipo" in columnas(tabla)
+    elif tabla in ("fact_renta_fija", "v_renta_fija_clasificada"):
+        catalogo, con_subtipo = _CAT_RF, False
+    else:
+        st.caption("Esta tabla no tiene una gramatica de graficos propia. "
+                   "Los graficos estan disponibles sobre derivados y renta fija.")
+        return
+
+    sub, where_g = None, where
+    if con_subtipo:
+        mix = q(f"""SELECT d.subtipo AS subtipo, count(*) AS n
+                    FROM {tabla} d {where} GROUP BY 1
+                    HAVING count(*) > 0 ORDER BY n DESC""")
+        if mix.empty:
+            st.info("Sin operaciones para este filtro."); return
+        etiquetas = {"Todos los instrumentos (solo ejes comunes)": None}
+        for s, n in zip(mix.subtipo, mix.n):
+            etiquetas[f"{s} ({int(n):,})"] = s
+        elegido = st.selectbox("Instrumento a graficar", list(etiquetas),
+                               help="Los ejes propios de cada instrumento (tasa "
+                                    "fija, cruce de monedas, precio pactado) solo "
+                                    "aparecen al elegir uno: mezclarlos pondria "
+                                    "un tipo de cambio y una tasa en el mismo eje.")
+        sub = etiquetas[elegido]
+        if sub is not None:
+            where_g = _y(where, f"d.subtipo = {_lit(sub)}")
+
+    aplica = [e for e in catalogo if e[2] is None or (sub and sub in e[2])]
+    necesarias = {c for e in aplica for c in e[3]}
+    cob = _cobertura(tabla, where_g, necesarias)
+
+    validos, caidos = [], []
+    for clave, titulo, _subs, req, fn in aplica:
+        faltan = [c for c in req if cob.get(c, 0) == 0]
+        (validos if not faltan else caidos).append((clave, titulo, fn, faltan))
+
+    if not validos:
+        st.info("Ningun grafico es calculable con las columnas que tienen dato "
+                "en este filtro."); return
+
+    # La key incluye tabla e instrumento a proposito: al cambiar cualquiera de
+    # los dos cambia la lista de graficos validos, y un widget con key fija se
+    # quedaria con un valor que ya no esta entre las opciones.
+    titulo = st.radio("Grafico", [v[1] for v in validos], horizontal=True,
+                      key=f"expl_grafico_{tabla}_{sub}")
+    clave, _t, fn, _f = next(v for v in validos if v[1] == titulo)
+    fn(tabla, where_g, clave)
+
+    # Lo que no se puede graficar se dice, con el motivo. Un grafico ausente
+    # sin explicacion se lee como que el dato no existe.
+    if caidos:
+        st.caption("No disponibles para esta seleccion por falta de dato: "
+                   + "; ".join(f"{t} (sin {', '.join(fl)})" for _c, t, _fn, fl in caidos))
+
+
 def vista_explorador(f: dict) -> None:
     st.subheader("Explorador libre")
     st.caption("La sabana completa con los filtros del sidebar aplicados, mas busqueda "
@@ -1871,6 +2276,12 @@ def vista_explorador(f: dict) -> None:
         ors = " OR ".join(f"lower(CAST(d.{c} AS VARCHAR)) LIKE '%{txt.lower()}%'"
                           for c in sorted(cols_tabla))
         extra = (extra + (" AND " if extra else " WHERE ") + f"({ors})")
+
+    # Los graficos van arriba del detalle y agregan sobre TODO el filtro, no
+    # sobre el tope de filas de la tabla: si el tope recorta, la tabla muestra
+    # una parte y el grafico sigue diciendo la verdad del filtro completo.
+    with st.container(border=True):
+        panel_graficos(tabla, extra)
 
     calc = ""
     if tabla == "fact_derivado":
