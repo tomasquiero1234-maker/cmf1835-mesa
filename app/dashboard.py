@@ -227,28 +227,45 @@ def _lit(v) -> str:
 PFX = "d."
 
 
+#: Una tabla puede no tener la columna a la que apunta un filtro del sidebar
+#: (las vistas clasificadas exponen menos columnas que el hecho crudo). En ese
+#: caso el predicado se omite, y la tabla mostraria MAS filas de las que el
+#: usuario pidio sin avisar. Se registra aqui para poder decirlo en pantalla:
+#: un filtro ignorado en silencio es una tabla que miente sobre lo que muestra.
+_OMITIDOS: list[str] = []
+
+
 def cl_in(tabla: str, col: str, sel, universo, pfx: str = PFX) -> str:
     """IN (...) solo si la seleccion recorta algo. Sin seleccion no filtra."""
-    if col not in columnas(tabla) or not sel or (universo and len(sel) == len(universo)):
+    if not sel or (universo and len(sel) == len(universo)):
+        return ""
+    if col not in columnas(tabla):
+        _OMITIDOS.append(col)
         return ""
     return f"{pfx}{col} IN ({', '.join(_lit(v) for v in sel)})"
 
 
 def cl_rango(tabla: str, col: str, sel, tope, pfx: str = PFX) -> str:
     """BETWEEN solo si el usuario movio alguna punta del slider."""
-    if col not in columnas(tabla) or not sel or not tope:
+    if not sel or not tope:
         return ""
     lo, hi = sel
     if lo <= tope[0] and hi >= tope[1]:
+        return ""
+    if col not in columnas(tabla):
+        _OMITIDOS.append(col)
         return ""
     return f"{pfx}{col} BETWEEN {lo} AND {hi}"
 
 
 def cl_fecha(tabla: str, col: str, sel, tope, pfx: str = PFX) -> str:
-    if col not in columnas(tabla) or not sel or not tope or len(sel) != 2:
+    if not sel or not tope or len(sel) != 2:
         return ""
     lo, hi = sel
     if lo <= tope[0] and hi >= tope[1]:
+        return ""
+    if col not in columnas(tabla):
+        _OMITIDOS.append(col)
         return ""
     return f"{pfx}{col} BETWEEN DATE '{lo}' AND DATE '{hi}'"
 
@@ -439,8 +456,11 @@ def construir_sidebar() -> dict:
 #  predicados por tabla
 # ---------------------------------------------------------------------------
 
-def predicados_derivado(f: dict, *, periodos: list[int] | None = None) -> str:
-    t = "fact_derivado"
+def predicados_derivado(f: dict, *, periodos: list[int] | None = None,
+                        tabla: str = "fact_derivado") -> str:
+    # v_derivado_clasificado es un SELECT d.* sobre fact_derivado, asi que
+    # hereda todas estas columnas y el mismo predicado le sirve tal cual.
+    t = tabla
     per = periodos if periodos is not None else f["periodos"]
     partes = [
         f"d.periodo_informacion IN ({', '.join(str(p) for p in per)})" if per else "1=0",
@@ -491,33 +511,52 @@ def predicados_derivado(f: dict, *, periodos: list[int] | None = None) -> str:
     return where(partes)
 
 
-def predicados_rf(f: dict) -> str:
-    t = "fact_renta_fija"
+#: v_renta_fija_clasificada no es un SELECT *: es un UNION de B.1 (local) con
+#: B.5 (extranjera) y lista las columnas una por una, renombrando dos. Sin este
+#: mapeo los filtros de moneda y duracion apuntarian a un nombre que la vista no
+#: tiene y se caerian solos, en vez de filtrar.
+_ALIAS_RF = {
+    "v_renta_fija_clasificada": {"unidad_monetaria": "moneda",
+                                 "duracion_modificada_aprox": "duracion"},
+}
+
+
+def predicados_rf(f: dict, tabla: str = "fact_renta_fija",
+                  *, periodos: list[int] | None = None) -> str:
+    t = tabla
+    per = periodos if periodos is not None else f["periodos"]
+    alias = _ALIAS_RF.get(t, {})
+
+    def C(col: str) -> str:
+        """Nombre fisico de la columna en la tabla elegida."""
+        return alias.get(col, col)
+
     partes = [
-        f"d.periodo_informacion IN ({', '.join(str(p) for p in f['periodos'])})" if f["periodos"] else "1=0",
-        cl_in(t, "rut_compania", f.get("companias"), f.get("_companias_all")),
-        cl_in(t, "tipo_instrumento", f.get("tipo_instrumento"), f.get("_tipo_instrumento_all")),
-        cl_in(t, "unidad_monetaria", f.get("unidades"), f.get("_unidades_all")),
-        cl_in(t, "clasificacion_riesgo", f.get("clasif_riesgo_rf"), f.get("_clasif_riesgo_rf_all")),
-        cl_in(t, "clasificacion_inversion", f.get("clasif_inversion"), f.get("_clasif_inversion_all")),
-        cl_in(t, "veredicto", f.get("veredictos"), f.get("_veredictos_all")),
-        cl_fecha(t, "fecha_emision", f.get("f_emision"), f.get("_f_emision_tope")),
-        cl_fecha(t, "fecha_compra", f.get("f_compra"), f.get("_f_compra_tope")),
-        cl_fecha(t, "fecha_vencimiento", f.get("f_venc_rf"), f.get("_f_venc_rf_tope")),
-        cl_rango(t, "plazo_meses", f.get("plazo_rf"), f.get("_plazo_rf_tope")),
-        cl_rango(t, "duracion_modificada_aprox", f.get("duracion"), f.get("_duracion_tope")),
-        cl_rango(t, "tir_compra", f.get("tir_c"), f.get("_tir_c_tope")),
-        cl_rango(t, "tir_mercado", f.get("tir_mk"), f.get("_tir_mk_tope")),
-        cl_rango(t, "tasa_emision", f.get("tasa_em"), f.get("_tasa_em_tope")),
-        cl_rango(t, "valor_final", f.get("vf_rf"), f.get("_vf_rf_tope")),
+        f"d.periodo_informacion IN ({', '.join(str(p) for p in per)})" if per else "1=0",
+        cl_in(t, C("rut_compania"), f.get("companias"), f.get("_companias_all")),
+        cl_in(t, C("tipo_instrumento"), f.get("tipo_instrumento"), f.get("_tipo_instrumento_all")),
+        cl_in(t, C("unidad_monetaria"), f.get("unidades"), f.get("_unidades_all")),
+        cl_in(t, C("clasificacion_riesgo"), f.get("clasif_riesgo_rf"), f.get("_clasif_riesgo_rf_all")),
+        cl_in(t, C("clasificacion_inversion"), f.get("clasif_inversion"), f.get("_clasif_inversion_all")),
+        cl_in(t, C("veredicto"), f.get("veredictos"), f.get("_veredictos_all")),
+        cl_fecha(t, C("fecha_emision"), f.get("f_emision"), f.get("_f_emision_tope")),
+        cl_fecha(t, C("fecha_compra"), f.get("f_compra"), f.get("_f_compra_tope")),
+        cl_fecha(t, C("fecha_vencimiento"), f.get("f_venc_rf"), f.get("_f_venc_rf_tope")),
+        cl_rango(t, C("plazo_meses"), f.get("plazo_rf"), f.get("_plazo_rf_tope")),
+        cl_rango(t, C("duracion_modificada_aprox"), f.get("duracion"), f.get("_duracion_tope")),
+        cl_rango(t, C("tir_compra"), f.get("tir_c"), f.get("_tir_c_tope")),
+        cl_rango(t, C("tir_mercado"), f.get("tir_mk"), f.get("_tir_mk_tope")),
+        cl_rango(t, C("tasa_emision"), f.get("tasa_em"), f.get("_tasa_em_tope")),
+        cl_rango(t, C("valor_final"), f.get("vf_rf"), f.get("_vf_rf_tope")),
     ]
     return where(partes)
 
 
-def predicados_garantia(f: dict) -> str:
+def predicados_garantia(f: dict, *, periodos: list[int] | None = None) -> str:
     t = "fact_garantia"
+    per = periodos if periodos is not None else f["periodos"]
     partes = [
-        f"d.periodo_informacion IN ({', '.join(str(p) for p in f['periodos'])})" if f["periodos"] else "1=0",
+        f"d.periodo_informacion IN ({', '.join(str(p) for p in per)})" if per else "1=0",
         cl_in(t, "rut_compania", f.get("companias"), f.get("_companias_all")),
         cl_in(t, "contraparte_grupo", f.get("grupos"), f.get("_grupos_all")),
         cl_in(t, "contraparte_key", f.get("contrapartes"), f.get("_contrapartes_all")),
@@ -1774,13 +1813,16 @@ def vista_explorador(f: dict) -> None:
     pers = [p for p in f["periodos"] if int(str(p)[:4]) in sel_anios] or f["periodos"]
     partes = [f"d.{col_per} IN ({', '.join(str(p) for p in pers)})" if pers else "1=0"]
 
-    # Los filtros del sidebar que apliquen a esta tabla.
-    if tabla == "fact_derivado":
-        extra = predicados_derivado(f, periodos=pers)
-    elif tabla == "fact_renta_fija":
-        extra = predicados_rf(f)
+    # Los filtros del sidebar que apliquen a esta tabla. Las vistas clasificadas
+    # van a la misma rama que su hecho: se construyen sobre el, asi que el
+    # predicado ya armado les aplica (con el alias de columnas para renta fija).
+    _OMITIDOS.clear()
+    if tabla in ("fact_derivado", "v_derivado_clasificado"):
+        extra = predicados_derivado(f, periodos=pers, tabla=tabla)
+    elif tabla in ("fact_renta_fija", "v_renta_fija_clasificada"):
+        extra = predicados_rf(f, tabla=tabla, periodos=pers)
     elif tabla == "fact_garantia":
-        extra = predicados_garantia(f)
+        extra = predicados_garantia(f, periodos=pers)
     else:
         extra = where(partes)
     if tabla in ("fact_equity", "fact_fondo", "fact_extranjero_rf",
@@ -1813,7 +1855,11 @@ def vista_explorador(f: dict) -> None:
             d.tir_mercado - d.tir_compra AS delta_tir"""
         join = JOIN_COMP
     elif tabla in ("fact_equity", "fact_fondo", "fact_garantia", "fact_extranjero_rf",
-                   "fact_extranjero_rv", "fact_otras_inv", "fact_control"):
+                   "fact_extranjero_rv", "fact_otras_inv", "fact_control",
+                   "v_derivado_clasificado", "v_renta_fija_clasificada"):
+        # Las vistas clasificadas ya traen sus propios calculados (mtm_neto_m,
+        # tenor_anios, spread_vs_mercado_pb), pero ninguna resuelve el nombre de
+        # la aseguradora: sin esto la tabla solo muestra el RUT.
         calc = f", {nombre_compania_sql()} AS aseguradora_nombre"
         join = JOIN_COMP
     else:
@@ -1823,6 +1869,12 @@ def vista_explorador(f: dict) -> None:
     df = q(sql)
     st.caption(f"{len(df):,} filas x {len(df.columns)} columnas"
                + (f"  ·  tope de {limite:,} alcanzado" if len(df) >= limite else ""))
+    # Un filtro activo que esta tabla no puede aplicar se dice, no se esconde:
+    # de lo contrario el usuario lee la tabla como si el filtro hubiera corrido.
+    if _OMITIDOS:
+        st.warning("Esta tabla no tiene estas columnas, asi que los filtros del "
+                   "sidebar que dependen de ellas NO estan aplicados: "
+                   + ", ".join(sorted(set(_OMITIDOS))))
     if df.empty:
         st.info("Sin filas para esos filtros."); return
 
