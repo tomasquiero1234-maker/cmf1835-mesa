@@ -80,8 +80,26 @@ WITH base AS (
     FROM fact_derivado d
 )
 SELECT *,
+    -- La moneda manda sobre el codigo oficial de TIPO_CONTRATO cuando las dos
+    -- patas quedan en unidades distintas. Preguntando "esto es IRS o CCS?" al
+    -- consultar el detalle: 581 de 765 registros que el codigo oficial marca
+    -- '01 tasa o inflacion' tienen UF contra $$/USD en las dos patas -- son
+    -- swaps promesa (UF vs CLP, para calzar duracion e inflacion entre
+    -- pasivos indexados y activos nominales), no cobertura de tasa de una
+    -- sola moneda. La CMF los codifica bajo 'tasa o inflacion' porque la UF
+    -- es la unidad de inflacion, pero economicamente son un intercambio de
+    -- monedas y pertenecen a FX/CCS. Solo el 24% de lo que el codigo oficial
+    -- llama IRS es genuinamente monomoneda: eso es lo que queda en TASAS.
+    CASE WHEN subtipo IN ('IRS', 'CCS')
+              AND m_larga IS NOT NULL AND m_corta IS NOT NULL AND m_larga <> m_corta
+         THEN TRUE ELSE FALSE
+    END AS es_multimoneda,
+
     -- --- clase de activo de primer nivel --------------------------------
     CASE
+        WHEN subtipo = 'IRS'
+             AND m_larga IS NOT NULL AND m_corta IS NOT NULL AND m_larga <> m_corta
+             THEN 'FX / CCS'
         WHEN subtipo = 'IRS'                                   THEN 'TASAS'
         WHEN subtipo = 'CCS'                                   THEN 'FX / CCS'
         WHEN producto = 'FORWARD'
@@ -94,7 +112,13 @@ SELECT *,
 
     -- --- el apellido -----------------------------------------------------
     CASE
-        -- IRS: lo nombra su indice flotante
+        -- IRS con monedas distintas: es un swap promesa, no cobertura de
+        -- tasa. Se nombra por el cruce, igual que un CCS de verdad.
+        WHEN subtipo = 'IRS'
+             AND m_larga IS NOT NULL AND m_corta IS NOT NULL AND m_larga <> m_corta
+             THEN 'CCS ' || m_larga || '/' || m_corta || ' (swap promesa)'
+
+        -- IRS de una sola moneda: lo nombra su indice flotante
         WHEN subtipo = 'IRS' AND indice = 'SIN_DETERMINAR' THEN 'IRS (indice s/d)'
         WHEN subtipo = 'IRS' AND indice = 'Fija contra Fija' THEN 'IRS Fija-Fija'
         WHEN subtipo = 'IRS' THEN 'IRS ' || indice
