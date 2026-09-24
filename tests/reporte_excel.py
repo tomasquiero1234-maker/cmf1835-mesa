@@ -169,6 +169,22 @@ def main() -> int:
     tot, b8 = stock["Total"].sum(), stock["Total declarado B.8"].sum()
     check(abs(tot / b8 - 1) < 0.03, f"industria {tot:,.0f} vs declarado {b8:,.0f} MM USD ({(tot / b8 - 1) * 100:+.2f}%)")
 
+    print("\n[7b] evolucion mensual coherente con las otras hojas")
+    act = f"{D.etiqueta_periodo(ctx.periodo)} (MM USD)"
+    ev = leer_tabla(wb, "Evol_Stock", "tbl_evol_stock")
+    check(abs(pd.to_numeric(ev[act]).sum() - tot) < 1e-6, f"Evol_Stock {act} = total de Stock_Clase ({tot:,.2f})")
+    for etq in ("Dic-2024", "Dic-2025"):
+        a = pd.to_numeric(ev[f"{etq} (MM USD)"]).sum(); b = pd.to_numeric(comp[f"{etq} (MM USD)"]).sum()
+        check(abs(a - b) < 1e-6, f"Evol_Stock {etq} = Comparativa {etq} ({a:,.2f})")
+    evc = leer_tabla(wb, "Evol_Stock_Clase", "tbl_evol_stock_clase")
+    check(abs(pd.to_numeric(evc[act]).sum() - tot) < 1e-6, "Evol_Stock_Clase suma lo mismo que Evol_Stock")
+    evd = leer_tabla(wb, "Evol_Deriv_Aseguradora", "tbl_evol_deriv_aseguradora")
+    evdc = leer_tabla(wb, "Evol_Deriv_Contraparte", "tbl_evol_deriv_contraparte")
+    check(abs(pd.to_numeric(evd[act]).sum() - por_aseg) < 1e-6 and abs(pd.to_numeric(evdc[act]).sum() - por_aseg) < 1e-6,
+          f"Evol_Deriv (aseguradora y contraparte) {act} = Deriv_Aseguradora ({por_aseg:,.2f})")
+    check(evdc["ID legal contraparte"].is_unique, "Evol_Deriv_Contraparte: una fila por entidad legal")
+    check(len([c for c in ev.columns if c.endswith("(MM USD)")]) == 21, "21 meses, de Dic-2024 al periodo actual")
+
     print("\n[8] el dashboard no se toco")
     diff = subprocess.run(["git", "diff", "--quiet", "HEAD", "--", "app/dashboard.py"], cwd=ROOT)
     check(diff.returncode == 0, "app/dashboard.py sin cambios respecto del ultimo commit")

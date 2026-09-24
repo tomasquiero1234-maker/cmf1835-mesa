@@ -288,6 +288,10 @@ def generar(periodo: int | None = None, salida: Path | None = None,
     idx = [("Stock_Clase", "tbl_stock_clase", f"Stock por aseguradora y clase de activo, {actual}"),
            ("Comparativa", "tbl_comparativa", "Total por aseguradora: Dic-2023, Dic-2024, Dic-2025 y periodo actual"),
            ("Comparativa_Clase", "tbl_comparativa_clase", "Lo mismo, abierto por clase de activo"),
+           ("Evol_Stock", "tbl_evol_stock", "Stock total por aseguradora, mes a mes desde Dic-2024"),
+           ("Evol_Stock_Clase", "tbl_evol_stock_clase", "Stock mensual por aseguradora y clase de activo"),
+           ("Evol_Deriv_Aseguradora", "tbl_evol_deriv_aseguradora", "Nocional de derivados mensual por aseguradora"),
+           ("Evol_Deriv_Contraparte", "tbl_evol_deriv_contraparte", "Nocional de derivados mensual por contraparte legal"),
            ("Deriv_Aseguradora", "tbl_deriv_aseguradora", "Nocional de derivados por aseguradora y por instrumento"),
            ("Deriv_Contraparte", "tbl_deriv_contraparte", "Nocional por contraparte, entidad legal por entidad legal"),
            ("Deriv_Aseg_x_Contraparte", "tbl_deriv_aseg_contraparte", "Cruce aseguradora por contraparte"),
@@ -384,6 +388,38 @@ def generar(periodo: int | None = None, salida: Path | None = None,
                  Col("Clase de activo", "clase", "texto", "Clase de activo")]
                 + [Col(c.header, c.fuente, c.fmt, c.descripcion) for c in per_cols + var_cols],
                 comp_clase, congelar_cols=3))
+
+    # --- evolucion mensual ----------------------------------------------------------------------
+    ev_a, ev_c = D.evolucion_stock(ctx)
+    ev_da, ev_dc = D.evolucion_derivados(ctx)
+    meses = [D.etiqueta_periodo(p) for p in D.periodos_disponibles(ctx)]
+    nota_tc = "Cada mes al dolar observado de su propio cierre: la variacion incluye efecto cambiario."
+
+    def cols_meses(que: str):
+        return [Col(f"{m} (MM USD)", m, "mm", f"{que} al cierre de {m}", total=True) for m in meses]
+
+    RUT_A = [Col("RUT aseguradora", "rut_compania", "id", "RUT de la compania"),
+             Col("Aseguradora", "aseguradora", "texto", "Nombre publicado en la CMF")]
+    L.hoja(Hoja("Evol_Stock", "tbl_evol_stock", "Evolucion mensual del stock por aseguradora",
+                f"Stock total mes a mes, {meses[0]} a {meses[-1]}. {nota_tc}",
+                RUT_A + cols_meses("Stock total"), ev_a,
+                total_etiqueta="Total industria (fuera de la tabla)"))
+    L.hoja(Hoja("Evol_Stock_Clase", "tbl_evol_stock_clase", "Evolucion mensual del stock por clase de activo",
+                f"Mismo cruce, abierto por clase de activo. {nota_tc}",
+                RUT_A + [Col("Clase de activo", "clase", "texto", "Clase de activo")]
+                + [Col(c.header, c.fuente, c.fmt, c.descripcion) for c in cols_meses("Stock de la clase")],
+                ev_c, congelar_cols=3))
+    L.hoja(Hoja("Evol_Deriv_Aseguradora", "tbl_evol_deriv_aseguradora",
+                "Evolucion mensual del nocional de derivados por aseguradora",
+                f"Suma lineal de nocionales, sin pactos. {nota_tc}",
+                RUT_A + cols_meses("Nocional de derivados (sin pactos)"), ev_da,
+                total_etiqueta="Total industria (fuera de la tabla)"))
+    L.hoja(Hoja("Evol_Deriv_Contraparte", "tbl_evol_deriv_contraparte",
+                "Evolucion mensual del nocional de derivados por contraparte legal",
+                f"Cada RUT o LEI es una entidad: filiales y matrices por separado. Sin pactos. {nota_tc}",
+                [C_CP[1], Col("Tipo ID", "entidad_tipo_id", "texto", "RUT, LEI, invalido o sin identificador"),
+                 C_CP[0], C_CP[2]] + cols_meses("Nocional de derivados con la entidad (sin pactos)"),
+                ev_dc, total_etiqueta="Total (fuera de la tabla)"))
 
     # --- derivados: resumenes ------------------------------------------------------------------
     fams = [f for f in D.FAMILIAS]

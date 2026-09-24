@@ -454,3 +454,73 @@ def direccion_fwd(r) -> str:
     if a == "CLP" and b != "CLP":
         return f"Venta {b}"
     return f"{a} contra {b}"
+
+
+# ---------------------------------------------------------------------------
+#  evolucion mensual
+# ---------------------------------------------------------------------------
+
+def periodos_disponibles(ctx: Contexto) -> list[int]:
+    """Todos los periodos del warehouse hasta el actual, en orden."""
+    return [r[0] for r in ctx.con.execute(
+        f"SELECT periodo FROM dim_periodo WHERE periodo <= {ctx.periodo} ORDER BY 1").fetchall()]
+
+
+def evolucion_stock(ctx: Contexto) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """(por aseguradora, por aseguradora x clase): una columna por mes.
+
+    Cada mes se convierte con el dolar de SU cierre, igual que la comparativa.
+    """
+    pers = periodos_disponibles(ctx)
+    faltan = [p for p in pers if p not in ctx.fx]
+    if faltan:
+        raise ValueError(f"Falta el dolar de cierre para {faltan}")
+    largo = pd.concat([stock_detalle(ctx, p).assign(columna=etiqueta_periodo(p)) for p in pers],
+                      ignore_index=True)
+    largo = largo.drop(columns="aseguradora").merge(ctx.aseguradoras, on="rut_compania", how="left")
+    cols = [etiqueta_periodo(p) for p in pers]
+    actual = cols[-1]
+
+    def armar(idx):
+        return (largo.pivot_table(index=idx, columns="columna", values="mm_usd", aggfunc="sum")
+                .reindex(columns=cols).reset_index())
+
+    por_aseg = armar(["rut_compania", "aseguradora"]).sort_values(actual, ascending=False)
+    por_clase = armar(["rut_compania", "aseguradora", "clase"])
+    orden = {c: i for i, c in enumerate(CLASES)}
+    por_clase = (por_clase.assign(_o=por_clase.clase.map(orden))
+                 .merge(por_aseg[["rut_compania", actual]].rename(columns={actual: "_t"}),
+                        on="rut_compania", how="left")
+                 .sort_values(["_t", "rut_compania", "_o"], ascending=[False, True, True])
+                 .drop(columns=["_o", "_t"]))
+    return por_aseg, por_clase
+
+
+def evolucion_derivados(ctx: Contexto) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """(por aseguradora, por contraparte legal): nocional mensual sin pactos.
+
+    La identidad legal se calcula sobre TODOS los meses a la vez, para que una
+    misma entidad tenga el mismo nombre en toda la serie.
+    """
+    pers = periodos_disponibles(ctx)
+    df = ctx.con.execute(
+        f"SELECT * FROM v_derivado_clasificado WHERE periodo_informacion <= {ctx.periodo}").fetch_df()
+    df = identificar(df)
+    df["familia"] = df["instrumento"].map(_familia)
+    df = df[df.familia != "Pacto"].merge(ctx.aseguradoras, on="rut_compania", how="left")
+    tc = df.periodo_informacion.map(lambda p: ctx.fx[p][0])
+    df["nocional_mmusd"] = pd.to_numeric(df.nocional_m, errors="coerce") / tc / 1000.0
+    df["columna"] = df.periodo_informacion.map(etiqueta_periodo)
+    cols = [etiqueta_periodo(p) for p in pers]
+    actual = cols[-1]
+
+    aseg = (df.pivot_table(index=["rut_compania", "aseguradora"], columns="columna",
+                           values="nocional_mmusd", aggfunc="sum")
+            .reindex(columns=cols).reset_index().sort_values(actual, ascending=False))
+    cp = (df.pivot_table(index="entidad_id", columns="columna", values="nocional_mmusd", aggfunc="sum")
+          .reindex(columns=cols))
+    # Nombre, tipo y pais del mes mas reciente en que aparece la entidad.
+    meta = (df.sort_values("periodo_informacion")
+            .groupby("entidad_id")[["entidad_tipo_id", "entidad_nombre", "entidad_pais"]].last())
+    cp = meta.join(cp).reset_index().sort_values(actual, ascending=False, na_position="last")
+    return aseg, cp
