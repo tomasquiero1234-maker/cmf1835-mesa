@@ -2,8 +2,7 @@
 reportes.excel
 ==============
 
-Escritura del libro Excel. Solo formato: los numeros vienen de reportes.datos
-y reportes.conciliacion.
+Escritura del libro Excel. Solo formato: los numeros vienen de reportes.datos.
 
 Contrato de estructura (para automatizar la lectura despues)
 ------------------------------------------------------------
@@ -91,7 +90,9 @@ class Hoja:
 
 def _valor(v):
     """Celda de Excel: NaN y NaT a vacio, fechas a date, numpy a python."""
-    if v is None:
+    if v is None or v is pd.NA or v is pd.NaT:
+        # pd.NA llega desde columnas enteras con nulos (p.ej. un RUT que solo
+        # existe para los papeles nacionales).
         return None
     if isinstance(v, float) and math.isnan(v):
         return None

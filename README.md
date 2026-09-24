@@ -110,15 +110,17 @@ campos en vez de rellenarlos con nulos; son 1.225.162 registros de
 
 Modulo paralelo al dashboard: lee el warehouse en solo-lectura y no importa ni
 modifica nada de `app/`. Genera un Excel estatico con el stock (sin flujos) de
-cada aseguradora en USD, la comparativa contra los cierres de anio, los
-derivados por aseguradora, por contraparte legal y por subyacente, una hoja
-tailor-made por tipo de derivado y la conciliacion de Confuturo.
+cada aseguradora en USD: por clase de activo, contra los cierres de anio y mes a
+mes; una hoja tailor-made por clase de activo (renta fija nacional e
+internacional, acciones, ETF, fondos, real estate, otras) y por tipo de
+derivado; y los derivados por aseguradora, contraparte legal y subyacente. El
+nocional de derivados va en columnas aparte: no suma al stock.
 
 ```bash
 python -m utils.fetch_usd       # dolar observado de cierre, a disco
 python -m utils.fetch_gleif     # nombre legal de cada LEI, a disco
 python -m reportes              # reportes/salida/stock_aseguradoras_AAAAMM.xlsx
-python -m tests.reporte_excel   # 21 controles contra la fuente
+python -m tests.reporte_excel   # controles contra la fuente (45)
 ```
 
 Para automatizar su lectura: cada hoja tiene una tabla de Excel con nombre

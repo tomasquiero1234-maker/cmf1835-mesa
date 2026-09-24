@@ -185,6 +185,34 @@ def main() -> int:
     check(evdc["ID legal contraparte"].is_unique, "Evol_Deriv_Contraparte: una fila por entidad legal")
     check(len([c for c in ev.columns if c.endswith("(MM USD)")]) == 21, "21 meses, de Dic-2024 al periodo actual")
 
+    print("\n[9] ajustes pedidos: nocional aparte, sin 'Fuente del nombre', sin Confuturo, detalle por clase")
+    nocol = "Derivados: nocional, fuera del total (MM USD)"
+    clases = [c for c in D.CLASES]
+    check(nocol in stock.columns and abs(stock[clases].sum(axis=1) - stock["Total"]).max() < 1e-6,
+          "Stock_Clase: el nocional esta en su columna y el Total es solo la suma de las clases")
+    check(abs(pd.to_numeric(stock[nocol]).sum() - por_aseg) < 1e-6,
+          f"el nocional de Stock_Clase ({pd.to_numeric(stock[nocol]).sum():,.2f}) = Deriv_Aseguradora")
+    for etq in ("Dic-2024", "Dic-2025", D.etiqueta_periodo(ctx.periodo)):
+        a_ = pd.to_numeric(comp[f"Nocional derivados {etq} (MM USD)"]).sum()
+        b_ = pd.to_numeric(evd[f"{etq} (MM USD)"]).sum()
+        check(abs(a_ - b_) < 1e-6, f"Comparativa: nocional {etq} = Evol_Deriv_Aseguradora ({a_:,.2f})")
+    check(comp["Nocional derivados Dic-2023 (MM USD)"].isna().all(), "nocional Dic-2023 vacio, no inventado")
+    check("Fuente del nombre" not in dc.columns, "Deriv_Contraparte sin la columna 'Fuente del nombre'")
+    check("Conciliacion_Confuturo" not in wb.sheetnames, "sin la hoja Conciliacion_Confuturo")
+    detalle = {"Renta_Fija": ("tbl_renta_fija", "Renta Fija"), "Acciones": ("tbl_acciones", "Equity"),
+               "ETF": ("tbl_etf", "ETF"), "Fondos_Inversion": ("tbl_fondos_inversion", "Fondos de Inversion"),
+               "Fondos_Mutuos": ("tbl_fondos_mutuos", "Fondos Mutuos"),
+               "Real_Estate": ("tbl_real_estate", "Real Estate"), "Otras_Inversiones": ("tbl_otras_inversiones", "Otros")}
+    for hoja, (tabla, clase) in detalle.items():
+        t = leer_tabla(wb, hoja, tabla)
+        a_, b_ = pd.to_numeric(t["Valor final (MM USD)"]).sum(), pd.to_numeric(stock[clase]).sum()
+        amb = set(t["Ambito"].dropna())
+        check(abs(a_ - b_) < 1e-6 and amb <= {"Nacional", "Internacional"} and t["Ambito"].notna().all(),
+              f"{hoja}: {len(t):,} filas, valor final {a_:,.2f} = Stock_Clase '{clase}', ambito {sorted(amb)}")
+    rf = leer_tabla(wb, "Renta_Fija", "tbl_renta_fija")
+    check(set(rf.Ambito) == {"Nacional", "Internacional"} and "CLEAS" not in set(rf["Tipo instrumento"]),
+          "Renta_Fija trae nacional e internacional, y el leasing no (va en Real_Estate)")
+
     print("\n[8] el dashboard no se toco")
     diff = subprocess.run(["git", "diff", "--quiet", "HEAD", "--", "app/dashboard.py"], cwd=ROOT)
     check(diff.returncode == 0, "app/dashboard.py sin cambios respecto del ultimo commit")

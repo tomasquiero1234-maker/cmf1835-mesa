@@ -524,3 +524,224 @@ def evolucion_derivados(ctx: Contexto) -> tuple[pd.DataFrame, pd.DataFrame]:
             .groupby("entidad_id")[["entidad_tipo_id", "entidad_nombre", "entidad_pais"]].last())
     cp = meta.join(cp).reset_index().sort_values(actual, ascending=False, na_position="last")
     return aseg, cp
+
+
+# ---------------------------------------------------------------------------
+#  nocional de derivados: informativo, NUNCA suma al stock
+# ---------------------------------------------------------------------------
+
+def nocional_derivados(ctx: Contexto, periodos: dict[str, int | None]) -> pd.DataFrame:
+    """Nocional de derivados (sin pactos) por aseguradora, una columna por periodo.
+
+    El nocional no es stock: es el tamano de referencia del contrato, no lo que
+    vale. Sumarlo a la cartera seria sumar peras con manzanas; va en columnas
+    aparte. Lo que si suma al stock es el valor razonable neto del derivado,
+    que es lo que la aseguradora registra en su balance y declara en el B.8.
+    """
+    out = None
+    for etq, p in periodos.items():
+        if p is None:
+            s = pd.DataFrame({"rut_compania": pd.Series(dtype="int64"), etq: pd.Series(dtype="float64")})
+        else:
+            s = ctx.con.execute(f"""SELECT rut_compania, sum(nocional_m) m FROM v_derivado_clasificado
+                WHERE periodo_informacion = {int(p)} AND instrumento <> 'Pacto' GROUP BY 1""").fetch_df()
+            s[etq] = ctx.a_mmusd(s.pop("m").astype(float), p)
+        out = s if out is None else out.merge(s, on="rut_compania", how="outer")
+    return out
+
+
+# ---------------------------------------------------------------------------
+#  detalle tailor-made de las inversiones (no derivados)
+# ---------------------------------------------------------------------------
+
+def _con_aseg(ctx: Contexto, df: pd.DataFrame, cols_mm: list[str], periodo: int) -> pd.DataFrame:
+    for c in cols_mm:
+        df[c] = ctx.a_mmusd(pd.to_numeric(df[c], errors="coerce").astype(float), periodo)
+    return df.merge(ctx.aseguradoras, on="rut_compania", how="left")
+
+
+def _mon_sql(col: str) -> str:
+    return f"CASE upper(trim({col})) WHEN 'PROM' THEN 'USD' WHEN '$$' THEN 'CLP' ELSE upper(trim({col})) END"
+
+
+def detalle_renta_fija(ctx: Contexto, periodo: int | None = None) -> pd.DataFrame:
+    """Un papel por fila, nacional (B.1) e internacional (B.5), sin leasing.
+
+    El leasing (CLEAS) va en Real Estate, igual que en el stock: aqui se
+    excluye para que el total de la hoja cuadre con la columna Renta Fija.
+    Se parte de v_renta_fija_clasificada (segmento y nombre del emisor ya
+    resueltos) filtrada a la publicacion vigente, y se completan los campos
+    que la vista no trae desde el anexo de origen, por (zip, archivo, linea).
+    """
+    p = periodo or ctx.periodo
+    # Dos ramas con join de IGUALDAD sobre datos ya filtrados al periodo. Un
+    # LEFT JOIN condicional (ambito = 'LOCAL' AND ...) impedia el hash join y
+    # obligaba a un loop anidado contra 2,2 millones de filas: 280 segundos.
+    comunes = """v.rut_compania, v.tipo_instrumento, v.segmento_emisor, v.instrumento_id,
+                 v.emisor_nombre, v.emisor_grupo, v.emisor_rut, v.moneda, v.valor_final,
+                 v.tasa_emision, v.tir_compra, v.tir_mercado, v.duracion, v.duracion_origen,
+                 v.clasificacion_riesgo, v.fecha_vencimiento,
+                 o.pais, o.valor_nominal, o.fecha_emision, o.fecha_compra"""
+    df = ctx.con.execute(f"""
+        WITH v AS (
+            SELECT v.* FROM v_renta_fija_clasificada v
+            JOIN publicacion_vigente pv ON pv.periodo_informacion = v.periodo_informacion
+             AND pv.zip_origen = v.zip_origen AND pv.recencia = 1
+            WHERE v.periodo_informacion = {int(p)} AND COALESCE(v.tipo_instrumento, '') <> 'CLEAS'),
+        rl AS (SELECT zip_origen, source_file, line_no, pais, valor_nominal, fecha_emision, fecha_compra
+               FROM raw_renta_fija WHERE periodo_informacion = {int(p)}),
+        rx AS (SELECT zip_origen, source_file, line_no, pais, valor_nominal, fecha_emision, fecha_compra
+               FROM raw_extranjero_rf WHERE periodo_informacion = {int(p)})
+        SELECT 'Nacional' AS ambito, {comunes} FROM v JOIN rl o
+          ON o.zip_origen = v.zip_origen AND o.source_file = v.source_file AND o.line_no = v.line_no
+          WHERE v.ambito = 'LOCAL'
+        UNION ALL
+        SELECT 'Internacional' AS ambito, {comunes} FROM v JOIN rx o
+          ON o.zip_origen = v.zip_origen AND o.source_file = v.source_file AND o.line_no = v.line_no
+          WHERE v.ambito = 'EXTRANJERO'
+    """).fetch_df()
+    # PDBC (pagare descontable) y BCU (bono en UF) son instrumentos del Banco
+    # Central por su propio codigo CMF, y los informan con el RUT del Banco
+    # Central (97029000). La vista del warehouse los rotula 'Bancario' y 'Otros'
+    # porque supone otro RUT para el Banco Central; se corrige aqui, sin tocar
+    # la vista que usa el dashboard.
+    bc = df.tipo_instrumento.isin(["PDBC", "BCU"]) & (pd.to_numeric(df.emisor_rut, errors="coerce") == 97029000)
+    df.loc[bc, "segmento_emisor"] = "Soberano"
+    df["plazo_residual_dias"] = (pd.to_datetime(df.fecha_vencimiento) - pd.Timestamp(ctx.fecha_cierre)).dt.days
+    df = _con_aseg(ctx, df, ["valor_final"], p)
+    return df.sort_values(["aseguradora", "valor_final"], ascending=[True, False])
+
+
+def _renta_variable(ctx: Contexto, p: int, filtro: str) -> pd.DataFrame:
+    """B.2 (nacional) y B.5 renta variable (internacional) con un filtro de
+    tipo de instrumento, en columnas comunes."""
+    V = lambda t: _vigente(t, p)  # noqa: E731
+    return ctx.con.execute(f"""
+        SELECT t.rut_compania, 'Nacional' AS ambito, t.tipo_instrumento,
+               t.nemotecnico AS instrumento, CAST(t.emisor_rut AS BIGINT) AS emisor_rut,
+               -- NOMBRE_DEL_FONDO no es el nombre del instrumento: la CMF lo define
+               -- como el fondo CUI de la aseguradora que el papel respalda ('NO
+               -- APLICA' si ninguno). El B.2 no trae el nombre del fondo invertido.
+               NULL AS nombre, t.nombre_fondo AS campo_fondo_cui,
+               CAST(t.rut_fondo AS BIGINT) AS rut_fondo,
+               'CL' AS pais, NULL AS bolsa, {_mon_sql('t.unidad_monetaria')} AS moneda,
+               t.tipo_fondo, t.segmento_fondo, t.subyacente, t.serie,
+               t.unidades, NULL AS valor_unitario, NULL AS valor_cuota,
+               t.valor_final, t.presencia_bursatil, t.participacion_pct,
+               t.filial_coligada, t.relacionado, t.clasificacion_riesgo, t.custodio
+        FROM {V('raw_equity')} AND ({filtro})
+        UNION ALL BY NAME
+        SELECT t.rut_compania, 'Internacional' AS ambito, t.tipo_instrumento,
+               t.isin AS instrumento, NULL AS emisor_rut, t.emisor AS nombre,
+               NULL AS campo_fondo_cui, NULL AS rut_fondo,
+               t.pais, t.bolsa, {_mon_sql('t.moneda')} AS moneda,
+               t.tipo_fondo, t.segmento_fondo, t.subyacente, t.serie,
+               t.unidades, t.valor_bursatil_unitario AS valor_unitario, t.valor_cuota,
+               t.valor_final, NULL AS presencia_bursatil, t.participacion_pct,
+               NULL AS filial_coligada, t.relacionado, t.clasificacion_riesgo, t.custodio
+        FROM {V('raw_extranjero_rv')} AND ({filtro})
+    """).fetch_df()
+
+
+def detalle_acciones(ctx: Contexto, periodo: int | None = None) -> pd.DataFrame:
+    """Acciones (codigos AC*). El nombre del emisor nacional sale de la nomina
+    de emisores de la CMF; el internacional lo informa la aseguradora."""
+    from utils.fetch_emisores import leer as leer_emisores
+    p = periodo or ctx.periodo
+    df = _renta_variable(ctx, p, "t.tipo_instrumento LIKE 'AC%'")
+    nomina = leer_emisores()
+    # Nacional: nombre desde el RUT en la nomina de emisores de la CMF, o vacio.
+    # Internacional: el nombre que informa la aseguradora.
+    df["emisor"] = [nomina.get(int(r)) if pd.notna(r) else n
+                    for r, n in zip(df.emisor_rut, df.nombre)]
+    df = _con_aseg(ctx, df, ["valor_final"], p)
+    return df.sort_values(["aseguradora", "valor_final"], ascending=[True, False])
+
+
+def detalle_etf(ctx: Contexto, periodo: int | None = None) -> pd.DataFrame:
+    p = periodo or ctx.periodo
+    df = _con_aseg(ctx, _renta_variable(ctx, p, "t.tipo_instrumento LIKE 'ETF%'"), ["valor_final"], p)
+    return df.sort_values(["aseguradora", "valor_final"], ascending=[True, False])
+
+
+def detalle_fondos_inversion(ctx: Contexto, periodo: int | None = None) -> pd.DataFrame:
+    p = periodo or ctx.periodo
+    df = _con_aseg(ctx, _renta_variable(ctx, p, "t.tipo_instrumento LIKE 'CFI%'"), ["valor_final"], p)
+    return df.sort_values(["aseguradora", "valor_final"], ascending=[True, False])
+
+
+def detalle_fondos_mutuos(ctx: Contexto, periodo: int | None = None) -> pd.DataFrame:
+    """B.3 completo (nacional) + codigos CFM* del B.5 (internacional). La
+    administradora nacional se nombra con la nomina de emisores de la CMF."""
+    from utils.fetch_emisores import leer as leer_emisores
+    p = periodo or ctx.periodo
+    df = ctx.con.execute(f"""
+        SELECT t.rut_compania, 'Nacional' AS ambito, t.tipo_instrumento, t.nemotecnico AS instrumento,
+               NULL AS nombre, t.nombre_fondo AS campo_fondo_cui,
+               CAST(t.rut_administradora AS BIGINT) AS rut_administradora,
+               'CL' AS pais, t.tipo_fondo, t.serie, {_mon_sql('t.unidad_monetaria')} AS moneda,
+               t.unidades, t.valor_cuota, t.valor_final, t.relacionado, t.clasificacion_riesgo
+        FROM {_vigente('raw_fondo', p)}
+        UNION ALL BY NAME
+        SELECT t.rut_compania, 'Internacional' AS ambito, t.tipo_instrumento, t.isin AS instrumento,
+               t.emisor AS nombre, NULL AS campo_fondo_cui, NULL AS rut_administradora, t.pais,
+               t.tipo_fondo, t.serie, {_mon_sql('t.moneda')} AS moneda, t.unidades, t.valor_cuota,
+               t.valor_final, t.relacionado, t.clasificacion_riesgo
+        FROM {_vigente('raw_extranjero_rv', p)} AND t.tipo_instrumento LIKE 'CFM%'
+    """).fetch_df()
+    nomina = leer_emisores()
+    df["administradora"] = [nomina.get(int(r)) if pd.notna(r) else None for r in df.rut_administradora]
+    df = _con_aseg(ctx, df, ["valor_final"], p)
+    return df.sort_values(["aseguradora", "valor_final"], ascending=[True, False])
+
+
+def detalle_real_estate(ctx: Contexto, periodo: int | None = None) -> pd.DataFrame:
+    """B.4 completo: bienes raices propios (BZ) y en leasing (CLEAS).
+
+    No se exporta el arrendatario: en el leasing habitacional es una persona
+    natural, y el analisis de cartera no lo necesita (ademas viene vacio).
+    """
+    p = periodo or ctx.periodo
+    df = ctx.con.execute(f"""
+        SELECT t.rut_compania,
+               -- El B.4 no trae pais, pero el 100% de los registros tiene comuna
+               -- con codigo SEIL de Chile (1 a 347) y ciudad chilena.
+               'Nacional' AS ambito,
+               CASE t.tipo_instrumento WHEN 'CLEAS' THEN 'Leasing' WHEN 'BZ' THEN 'Propio'
+                    ELSE t.tipo_instrumento END AS tenencia,
+               t.tipo_instrumento, t.rol, t.nemotecnico, t.tipo_inmueble,
+               CASE t.urbano WHEN 'UR' THEN 'Urbano' WHEN 'NU' THEN 'No urbano' ELSE t.urbano END AS urbano,
+               CASE t.destino WHEN 'HA' THEN 'Habitacional' WHEN 'NH' THEN 'No habitacional'
+                    ELSE t.destino END AS destino,
+               t.uso, t.comuna, t.ciudad, t.fecha_compra, t.m2_terreno, t.m2_construccion,
+               t.costo_actualizado, t.depreciacion_acumulada, t.costo_corregido,
+               t.tasacion_1, t.tasacion_2,
+               CASE WHEN COALESCE(t.tasacion_1,0) > 0 AND COALESCE(t.tasacion_2,0) > 0
+                         THEN least(t.tasacion_1, t.tasacion_2)
+                    WHEN COALESCE(t.tasacion_1,0) > 0 THEN t.tasacion_1
+                    WHEN COALESCE(t.tasacion_2,0) > 0 THEN t.tasacion_2 END AS menor_tasacion,
+               t.fecha_tasacion_1, t.fecha_tasacion_2, t.deterioro, t.valor_final,
+               t.monto_arriendo_uf, t.saldo_plazo_arriendo_meses, t.vida_util_restante_meses,
+               t.copropiedad_pct, t.prohibicion_o_gravamen
+        FROM {_vigente('raw_bienes_raices', p)}
+    """).fetch_df()
+    df = _con_aseg(ctx, df, ["costo_actualizado", "depreciacion_acumulada", "costo_corregido",
+                             "tasacion_1", "tasacion_2", "menor_tasacion", "deterioro", "valor_final"], p)
+    return df.sort_values(["aseguradora", "valor_final"], ascending=[True, False])
+
+
+def detalle_otras(ctx: Contexto, periodo: int | None = None) -> pd.DataFrame:
+    """B.6. Ambito: OIED es 'otra inversion extranjera' por definicion del
+    anexo; para el resto se usa el pais informado."""
+    p = periodo or ctx.periodo
+    df = ctx.con.execute(f"""
+        SELECT t.rut_compania,
+               CASE WHEN t.tipo_instrumento LIKE '%OIED' OR COALESCE(upper(t.pais), 'CL') <> 'CL'
+                    THEN 'Internacional' ELSE 'Nacional' END AS ambito,
+               t.tipo_instrumento, t.codigo_inversion, t.nemotecnico, t.pais,
+               {_mon_sql('t.moneda')} AS moneda, t.valor_costo, t.depreciacion, t.valor_razonable,
+               t.deterioro, t.valor_final, t.clasificacion_riesgo, t.custodio
+        FROM {_vigente('raw_otras_inv', p)}
+    """).fetch_df()
+    df = _con_aseg(ctx, df, ["valor_costo", "depreciacion", "valor_razonable", "deterioro", "valor_final"], p)
+    return df.sort_values(["aseguradora", "valor_final"], ascending=[True, False])

@@ -2,8 +2,7 @@
 reportes.exportar
 =================
 
-Arma el libro completo: datos (reportes.datos), conciliacion
-(reportes.conciliacion) y formato (reportes.excel).
+Arma el libro completo: datos (reportes.datos) y formato (reportes.excel).
 
     python -m reportes                      # periodo mas reciente
     python -m reportes --periodo 202608 --salida reportes/salida/stock.xlsx
@@ -17,7 +16,6 @@ import numpy as np
 import pandas as pd
 
 from reportes import datos as D
-from reportes.conciliacion import LIBRO_BBVA, conciliar
 from reportes.excel import FILA_HEADER, Col, Hoja, Libro
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -235,11 +233,188 @@ def hojas_instrumentos(ops: pd.DataFrame) -> list[Hoja]:
 
 
 # ---------------------------------------------------------------------------
+#  hojas tailor-made de las inversiones (no derivados)
+# ---------------------------------------------------------------------------
+
+AMBITO = Col("Ambito", "ambito", "texto",
+             "Nacional o Internacional. Nacional: anexos locales (B.1 a B.4; B.6 con pais CL). "
+             "Internacional: B.5 (inversiones en el extranjero) y B.6 con otro pais o codigo OIED")
+TIPO = Col("Tipo instrumento", "tipo_instrumento", "texto", "Codigo CMF del instrumento, tal como se informa")
+VF = Col("Valor final (MM USD)", "valor_final", "mm",
+         "Valor final informado en M$, convertido al dolar observado del cierre", total=True)
+MONEDA = Col("Moneda", "moneda", "texto", "Unidad o moneda del instrumento (UF, CLP, USD, EUR...)")
+PAIS = Col("Pais", "pais", "texto", "Pais informado")
+REL = Col("Relacionado", "relacionado", "texto", "Si el emisor esta relacionado con la aseguradora, segun se informa")
+
+
+def hojas_inversiones(ctx) -> list[Hoja]:
+    """Una hoja por clase de activo, con las columnas propias de cada una. La
+    suma del valor final de cada hoja cuadra con su columna en Stock_Clase."""
+    out: list[Hoja] = []
+
+    out.append(Hoja(
+        "Renta_Fija", "tbl_renta_fija", "Renta fija nacional e internacional",
+        "Un papel por fila. Nacional = B.1; internacional = B.5. Sin leasing: va en Real_Estate, como en el stock.",
+        C_ASEG + [AMBITO, TIPO,
+            Col("Segmento emisor", "segmento_emisor", "texto",
+                "Soberano, Bancario, Corporativo, Hipotecario/Leasing u Otros. PDBC y BCU (Banco Central) van como "
+                "Soberano; el dashboard todavia los rotula distinto"),
+            Col("Instrumento", "instrumento_id", "texto", "Nemotecnico (nacional) o ISIN (internacional)"),
+            Col("Emisor", "emisor_nombre", "texto",
+                "Nacional: nombre resuelto desde el RUT (nomina CMF, catalogo, aseguradoras), vacio si no se pudo; "
+                "internacional: el que informa la aseguradora"),
+            Col("Grupo emisor", "emisor_grupo", "texto", "Grupo economico del emisor, si esta en el catalogo"),
+            Col("RUT emisor", "emisor_rut", "id", "RUT del emisor (solo nacional)"),
+            PAIS, MONEDA,
+            Col("Valor nominal (unidad del instrumento)", "valor_nominal", "num2", "Nominal en la unidad del instrumento"),
+            VF,
+            Col("Tasa de emision (%)", "tasa_emision", "tasa", "Tasa de emision del papel"),
+            Col("TIR de compra (%)", "tir_compra", "tasa", "TIR a la que se compro"),
+            Col("TIR de mercado (%)", "tir_mercado", "tasa", "TIR de mercado al cierre"),
+            Col("Duracion (anios)", "duracion", "anios",
+                "Nacional: aproximada con el plazo y la TIR (el B.1 no la pide); internacional: informada"),
+            Col("Origen de la duracion", "duracion_origen", "texto", "aproximada o informada"),
+            Col("Clasificacion de riesgo", "clasificacion_riesgo", "texto", "Clasificacion de riesgo informada"),
+            Col("Fecha emision", "fecha_emision", "fecha", "Fecha de emision"),
+            Col("Fecha compra", "fecha_compra", "fecha", "Fecha de compra"),
+            Col("Fecha vencimiento", "fecha_vencimiento", "fecha", "Fecha de vencimiento"),
+            Col("Plazo residual (dias)", "plazo_residual_dias", "entero", "Dias desde la fecha de corte al vencimiento")],
+        D.detalle_renta_fija(ctx), total_etiqueta="Total renta fija (fuera de la tabla)"))
+
+    out.append(Hoja(
+        "Acciones", "tbl_acciones", "Acciones (equity)",
+        "Acciones nacionales (B.2) e internacionales (B.5): codigos CMF AC*.",
+        C_ASEG + [AMBITO, TIPO,
+            Col("Instrumento", "instrumento", "texto", "Nemotecnico (nacional) o ISIN (internacional)"),
+            Col("Emisor", "emisor", "texto",
+                "Nacional: nombre segun la nomina de emisores de la CMF, desde el RUT; internacional: informado"),
+            Col("RUT emisor", "emisor_rut", "id", "RUT del emisor (solo nacional)"),
+            PAIS, Col("Bolsa", "bolsa", "texto", "Bolsa donde transa (solo internacional)"), MONEDA,
+            Col("Unidades (acciones)", "unidades", "num0", "Numero de acciones"),
+            VF,
+            Col("Presencia bursatil (%)", "presencia_bursatil", "pct", "Presencia bursatil de la accion (solo nacional)"),
+            Col("Participacion en la sociedad (%)", "participacion_pct", "pct", "Porcentaje de la sociedad que posee"),
+            Col("Filial o coligada", "filial_coligada", "texto", "Si la sociedad es filial o coligada (solo nacional)"),
+            REL, Col("Clasificacion de riesgo", "clasificacion_riesgo", "texto", "Clasificacion informada"),
+            Col("Campo fondo CUI (tal como se informa)", "campo_fondo_cui", "texto",
+                "Campo NOMBRE_DEL_FONDO del anexo. La CMF lo define como el fondo del seguro con cuenta unica "
+                "de inversion (CUI) que respalda el papel, o 'NO APLICA'; algunas aseguradoras escriben ahi otra "
+                "descripcion. No es el nombre del instrumento. Solo nacional")],
+        D.detalle_acciones(ctx), total_etiqueta="Total acciones (fuera de la tabla)"))
+
+    out.append(Hoja(
+        "ETF", "tbl_etf", "ETF",
+        "Fondos transados en bolsa (B.5): codigos CMF ETF*.",
+        C_ASEG + [AMBITO, TIPO,
+            Col("Instrumento (ISIN)", "instrumento", "texto", "ISIN del ETF"),
+            Col("Nombre", "nombre", "texto", "Nombre del ETF, informado"),
+            PAIS, Col("Bolsa", "bolsa", "texto", "Bolsa donde transa"), MONEDA,
+            Col("Subyacente", "subyacente", "texto", "Subyacente informado"),
+            Col("Unidades", "unidades", "num2", "Cuotas del ETF"),
+            Col("Precio unitario (moneda del ETF)", "valor_unitario", "num2", "Valor bursatil unitario informado"),
+            VF, Col("Custodio", "custodio", "texto", "Custodio informado")],
+        D.detalle_etf(ctx), total_etiqueta="Total ETF (fuera de la tabla)"))
+
+    out.append(Hoja(
+        "Fondos_Inversion", "tbl_fondos_inversion", "Fondos de inversion",
+        "Cuotas de fondos de inversion nacionales (B.2) e internacionales (B.5): codigos CMF CFI*.",
+        C_ASEG + [AMBITO, TIPO,
+            Col("Instrumento", "instrumento", "texto", "Nemotecnico (nacional) o ISIN (internacional)"),
+            Col("Fondo (nombre)", "nombre", "texto",
+                "Solo internacional (B.5). El B.2 no informa el nombre del fondo: identificarlo por el nemotecnico"),
+            Col("RUT emisor informado", "emisor_rut", "id",
+                "Campo RUT del emisor del B.2 (en cuotas de fondos suele ser el de la administradora)"),
+            PAIS, MONEDA,
+            Col("Tipo de fondo", "tipo_fondo", "texto", "Tipo de fondo informado"),
+            Col("Segmento", "segmento_fondo", "texto", "Segmento del fondo informado"),
+            Col("Subyacente", "subyacente", "texto", "Subyacente informado"),
+            Col("Cuotas", "unidades", "num2", "Cuotas que posee la aseguradora"),
+            Col("Valor cuota (moneda del fondo)", "valor_cuota", "num2", "Solo internacional: el B.2 no lo informa"),
+            VF,
+            Col("Participacion en el fondo (%)", "participacion_pct", "pct", "Porcentaje del fondo que posee"),
+            REL, Col("Campo fondo CUI (tal como se informa)", "campo_fondo_cui", "texto",
+                "Campo NOMBRE_DEL_FONDO del anexo. La CMF lo define como el fondo del seguro con cuenta unica "
+                "de inversion (CUI) que respalda el papel, o 'NO APLICA'; algunas aseguradoras escriben ahi otra "
+                "descripcion. No es el nombre del instrumento. Solo nacional")],
+        D.detalle_fondos_inversion(ctx), total_etiqueta="Total fondos de inversion (fuera de la tabla)"))
+
+    out.append(Hoja(
+        "Fondos_Mutuos", "tbl_fondos_mutuos", "Fondos mutuos",
+        "Cuotas de fondos mutuos nacionales (B.3) e internacionales (B.5): codigos CMF CFM*.",
+        C_ASEG + [AMBITO, TIPO,
+            Col("Instrumento", "instrumento", "texto", "Nemotecnico (nacional) o ISIN (internacional)"),
+            Col("Fondo (nombre)", "nombre", "texto",
+                "Solo internacional (B.5). El B.3 no informa el nombre del fondo: identificarlo por el nemotecnico"),
+            Col("Administradora", "administradora", "texto",
+                "Nacional: nombre segun la nomina de emisores de la CMF; vacio si no esta (las administradoras "
+                "generales de fondos estan en otro registro)"),
+            Col("RUT administradora", "rut_administradora", "id", "RUT de la administradora (solo nacional)"),
+            PAIS, MONEDA,
+            Col("Tipo de fondo", "tipo_fondo", "texto", "Tipo de fondo informado"),
+            Col("Serie", "serie", "texto", "Serie de la cuota"),
+            Col("Cuotas", "unidades", "num2", "Cuotas que posee la aseguradora"),
+            Col("Valor cuota (moneda del fondo)", "valor_cuota", "num2", "Valor cuota informado"),
+            VF, REL, Col("Campo fondo CUI (tal como se informa)", "campo_fondo_cui", "texto",
+                "Campo NOMBRE_DEL_FONDO del anexo. La CMF lo define como el fondo del seguro con cuenta unica "
+                "de inversion (CUI) que respalda el papel, o 'NO APLICA'; algunas aseguradoras escriben ahi otra "
+                "descripcion. No es el nombre del instrumento. Solo nacional")],
+        D.detalle_fondos_mutuos(ctx), total_etiqueta="Total fondos mutuos (fuera de la tabla)"))
+
+    out.append(Hoja(
+        "Real_Estate", "tbl_real_estate", "Real estate: bienes raices propios y en leasing",
+        "B.4 completo. No se incluye el nombre del arrendatario (persona natural en el leasing habitacional).",
+        C_ASEG + [AMBITO,
+            Col("Tenencia", "tenencia", "texto", "Propio (BZ) o dado en leasing (CLEAS)"),
+            Col("Rol SII", "rol", "texto", "Rol del bien raiz en el Servicio de Impuestos Internos"),
+            Col("Nemotecnico (leasing)", "nemotecnico", "texto", "Codigo del contrato de leasing, si lo es"),
+            Col("Tipo de inmueble", "tipo_inmueble", "texto",
+                "Marcas S del anexo: local, oficina, bodega, estacionamiento, terreno, casa, edificio..."),
+            Col("Urbano", "urbano", "texto", "Urbano o no urbano"),
+            Col("Destino", "destino", "texto", "Habitacional o no habitacional"),
+            Col("Uso (codigo SEIL)", "uso", "texto", "Codigo de uso segun la codificacion CMF; sin traducir"),
+            Col("Comuna (codigo SEIL)", "comuna", "texto", "Codigo de comuna segun la codificacion CMF"),
+            Col("Ciudad", "ciudad", "texto", "Ciudad informada"),
+            Col("Fecha compra", "fecha_compra", "fecha", "Fecha de adquisicion"),
+            Col("m2 terreno", "m2_terreno", "num0", "Superficie del terreno"),
+            Col("m2 construccion", "m2_construccion", "num0", "Superficie construida"),
+            Col("Costo actualizado (MM USD)", "costo_actualizado", "mm", "Costo de adquisicion revalorizado", total=True),
+            Col("Depreciacion acumulada (MM USD)", "depreciacion_acumulada", "mm", "Depreciacion acumulada", total=True),
+            Col("Costo corregido (MM USD)", "costo_corregido", "mm", "Costo actualizado menos depreciacion", total=True),
+            Col("Tasacion 1 (MM USD)", "tasacion_1", "mm", "Primera tasacion (NCG 42)"),
+            Col("Tasacion 2 (MM USD)", "tasacion_2", "mm", "Segunda tasacion (NCG 42)"),
+            Col("Menor tasacion (MM USD)", "menor_tasacion", "mm", "La menor de las tasaciones informadas"),
+            Col("Fecha tasacion 1", "fecha_tasacion_1", "fecha", "Fecha de la primera tasacion"),
+            VF,
+            Col("Arriendo mensual (UF)", "monto_arriendo_uf", "num2", "Arriendo mensual equivalente, en UF"),
+            Col("Saldo plazo arriendo (meses)", "saldo_plazo_arriendo_meses", "entero", "Meses restantes del leasing"),
+            Col("Vida util restante (meses)", "vida_util_restante_meses", "entero", "Meses de vida util restante"),
+            Col("Copropiedad (%)", "copropiedad_pct", "pct", "Porcentaje de propiedad si es copropietaria"),
+            Col("Prohibicion o gravamen", "prohibicion_o_gravamen", "texto", "S si tiene prohibicion o gravamen")],
+        D.detalle_real_estate(ctx), total_etiqueta="Total real estate (fuera de la tabla)"))
+
+    out.append(Hoja(
+        "Otras_Inversiones", "tbl_otras_inversiones", "Otras inversiones",
+        "B.6: caja, prestamos, avances a tenedores, mobiliario y otras inversiones (NCG 152).",
+        C_ASEG + [AMBITO, TIPO,
+            Col("Codigo o nombre de la inversion", "codigo_inversion", "texto", "Tal como se informa"),
+            Col("Nemotecnico", "nemotecnico", "texto", "Nemotecnico, si lo tiene"),
+            PAIS, MONEDA,
+            Col("Valor costo (MM USD)", "valor_costo", "mm", "Valor de costo actualizado", total=True),
+            Col("Depreciacion (MM USD)", "depreciacion", "mm", "Depreciacion acumulada", total=True),
+            Col("Valor razonable (MM USD)", "valor_razonable", "mm", "Valor razonable informado", total=True),
+            Col("Deterioro (MM USD)", "deterioro", "mm", "Deterioro informado", total=True),
+            VF,
+            Col("Clasificacion de riesgo", "clasificacion_riesgo", "texto", "Clasificacion informada"),
+            Col("Custodio", "custodio", "texto", "Custodio informado")],
+        D.detalle_otras(ctx), total_etiqueta="Total otras inversiones (fuera de la tabla)"))
+    return out
+
+
+# ---------------------------------------------------------------------------
 #  libro completo
 # ---------------------------------------------------------------------------
 
-def generar(periodo: int | None = None, salida: Path | None = None,
-            libro_bbva: Path = LIBRO_BBVA) -> Path:
+def generar(periodo: int | None = None, salida: Path | None = None) -> Path:
     ctx = D.contexto(periodo)
     actual = D.etiqueta_periodo(ctx.periodo)
     tc, tc_fecha = ctx.fx[ctx.periodo]
@@ -253,7 +428,18 @@ def generar(periodo: int | None = None, salida: Path | None = None,
     stock = D.stock_por_clase(ctx)
     comp_aseg, comp_clase = D.comparativa(ctx)
     ops = D.derivados(ctx)
-    conc = conciliar(ctx.con, ctx.periodo, libro_bbva) if Path(libro_bbva).exists() else None
+    periodos_noc = {**ctx.cierres, actual: ctx.periodo}
+    nocs = D.nocional_derivados(ctx, periodos_noc)
+    for k, p in periodos_noc.items():
+        if p is not None:          # sin derivados ese mes = 0; mes no disponible queda vacio
+            nocs[k] = nocs[k].fillna(0.0)
+    nocs = nocs.rename(columns={k: f"noc_{k}" for k in periodos_noc})
+    stock = stock.merge(nocs[["rut_compania", f"noc_{actual}"]], on="rut_compania", how="left")
+    stock[f"noc_{actual}"] = stock[f"noc_{actual}"].fillna(0.0)
+    comp_aseg = comp_aseg.merge(nocs, on="rut_compania", how="left")
+    for k, p in periodos_noc.items():
+        if p is not None:
+            comp_aseg[f"noc_{k}"] = comp_aseg[f"noc_{k}"].fillna(0.0)
 
     # --- portada -----------------------------------------------------------------
     ws = L.wb.create_sheet("Portada")
@@ -279,23 +465,32 @@ def generar(periodo: int | None = None, salida: Path | None = None,
                    "tbl_portada", hoja="Portada")
 
     ind = stock[D.CLASES + ["Total", "Total declarado B.8"]].sum()
-    kpi = pd.DataFrame({"Concepto": [f"{c} ({actual})" for c in ind.index],
-                        "Valor (MM USD)": ind.values.astype(float)})
+    conceptos = [f"{c} ({actual})" for c in ind.index] + [f"Derivados: nocional, NO suma al total ({actual})"]
+    valores = list(ind.values.astype(float)) + [float(stock[f"noc_{actual}"].sum())]
+    kpi = pd.DataFrame({"Concepto": conceptos, "Valor (MM USD)": valores})
     fila = L.tabla(ws, kpi, [Col("Concepto", "Concepto", "texto", "Total de la industria por clase de activo"),
                              Col("Valor (MM USD)", "Valor (MM USD)", "mm", "Suma de todas las aseguradoras")],
                    "tbl_industria", fila=fila + 3, hoja="Portada")
 
-    idx = [("Stock_Clase", "tbl_stock_clase", f"Stock por aseguradora y clase de activo, {actual}"),
-           ("Comparativa", "tbl_comparativa", "Total por aseguradora: Dic-2023, Dic-2024, Dic-2025 y periodo actual"),
+    idx = [("Stock_Clase", "tbl_stock_clase", f"Stock por aseguradora y clase de activo, {actual}, y nocional de derivados aparte"),
+           ("Comparativa", "tbl_comparativa", "Stock total por aseguradora: Dic-2023, Dic-2024, Dic-2025 y periodo actual, "
+                                              "y nocional de derivados aparte"),
            ("Comparativa_Clase", "tbl_comparativa_clase", "Lo mismo, abierto por clase de activo"),
            ("Evol_Stock", "tbl_evol_stock", "Stock total por aseguradora, mes a mes desde Dic-2024"),
            ("Evol_Stock_Clase", "tbl_evol_stock_clase", "Stock mensual por aseguradora y clase de activo"),
-           ("Evol_Deriv_Aseguradora", "tbl_evol_deriv_aseguradora", "Nocional de derivados mensual por aseguradora"),
-           ("Evol_Deriv_Contraparte", "tbl_evol_deriv_contraparte", "Nocional de derivados mensual por contraparte legal"),
+           ("Renta_Fija", "tbl_renta_fija", "Detalle tailor-made: renta fija, nacional e internacional"),
+           ("Acciones", "tbl_acciones", "Detalle tailor-made: acciones"),
+           ("ETF", "tbl_etf", "Detalle tailor-made: ETF"),
+           ("Fondos_Inversion", "tbl_fondos_inversion", "Detalle tailor-made: fondos de inversion"),
+           ("Fondos_Mutuos", "tbl_fondos_mutuos", "Detalle tailor-made: fondos mutuos"),
+           ("Real_Estate", "tbl_real_estate", "Detalle tailor-made: bienes raices propios y en leasing"),
+           ("Otras_Inversiones", "tbl_otras_inversiones", "Detalle tailor-made: otras inversiones"),
            ("Deriv_Aseguradora", "tbl_deriv_aseguradora", "Nocional de derivados por aseguradora y por instrumento"),
            ("Deriv_Contraparte", "tbl_deriv_contraparte", "Nocional por contraparte, entidad legal por entidad legal"),
            ("Deriv_Aseg_x_Contraparte", "tbl_deriv_aseg_contraparte", "Cruce aseguradora por contraparte"),
            ("Deriv_Subyacente", "tbl_deriv_subyacente", "Nocional por activo subyacente"),
+           ("Evol_Deriv_Aseguradora", "tbl_evol_deriv_aseguradora", "Nocional de derivados mensual por aseguradora"),
+           ("Evol_Deriv_Contraparte", "tbl_evol_deriv_contraparte", "Nocional de derivados mensual por contraparte legal"),
            ("CCS", "tbl_ccs", "Detalle tailor-made: cross currency swaps"),
            ("Swap_Promesa", "tbl_swap_promesa", "Detalle tailor-made: swaps UF contra pesos"),
            ("Forward_FX", "tbl_forward_fx", "Detalle tailor-made: forwards de moneda"),
@@ -304,7 +499,6 @@ def generar(periodo: int | None = None, salida: Path | None = None,
            ("Opciones", "tbl_opciones", "Detalle tailor-made: opciones"),
            ("Futuros", "tbl_futuros", "Detalle tailor-made: futuros"),
            ("Pactos", "tbl_pactos", "Pactos, fuera del total de derivados"),
-           ("Conciliacion_Confuturo", "tbl_conciliacion", "Libro de BBVA con Confuturo contra lo informado a la CMF"),
            ("Calidad_Contrapartes", "tbl_calidad_contrapartes", "Identificadores de contraparte con alertas"),
            ("Diccionario", "tbl_diccionario", "Unidad y definicion de cada columna")]
     fila = L.tabla(ws, pd.DataFrame(idx, columns=["Hoja", "Tabla", "Contenido"]),
@@ -317,8 +511,13 @@ def generar(periodo: int | None = None, salida: Path | None = None,
              and pd.isna(comp_aseg.set_index("rut_compania").get(actual, pd.Series()).get(a.rut_compania))]
     notas = [
         "Stock: valor final informado en cada anexo de detalle (B.1 a B.7), sin flujos.",
+        "Derivados en el stock: se suma su valor razonable neto, que es lo que la aseguradora registra en su "
+        "balance y declara en el B.8. El nocional va en columnas aparte y NO suma al total: es el tamano de "
+        "referencia del contrato, no lo que vale. Sumarlo seria mezclar peras con manzanas.",
         "Real Estate = bienes raices del B.4, propios y en leasing. El leasing se cuenta una vez: se excluye del "
         "B.1, donde tambien figura como contrato. Contarlo dos veces no cuadra con el total declarado.",
+        "Hojas de detalle por clase (Renta_Fija a Otras_Inversiones): la suma del valor final de cada hoja es "
+        "igual a su columna en Stock_Clase.",
         "Cuadratura: 'Total declarado B.8' es lo que cada aseguradora declara como total de inversiones "
         "(representativas + no representativas). En la industria el detalle queda "
         f"{(stock.Total.sum() / stock['Total declarado B.8'].sum() - 1) * 100:+.2f}% del declarado.",
@@ -344,6 +543,9 @@ def generar(periodo: int | None = None, salida: Path | None = None,
     ws.column_dimensions["A"].width = 34
     ws.column_dimensions["B"].width = 95
 
+    RUT_A = [Col("RUT aseguradora", "rut_compania", "id", "RUT de la compania"),
+             Col("Aseguradora", "aseguradora", "texto", "Nombre publicado en la CMF")]
+
     # --- stock por clase -------------------------------------------------------------
     cl = [Col(c, c, "mm", d, total=True) for c, d in [
         ("Renta Fija", "B.1 local (sin leasing) + B.5 renta fija extranjera"),
@@ -354,17 +556,22 @@ def generar(periodo: int | None = None, salida: Path | None = None,
         ("Real Estate", "B.4: bienes raices propios y en leasing"),
         ("de la cual leasing", "Parte de Real Estate que son bienes raices dados en leasing (CLEAS)"),
         ("Otros", "B.6: otras inversiones (caja, prestamos, avances, mobiliario)"),
-        ("Derivados (valor razonable neto)", "B.7 sin pactos: valor razonable activo menos pasivo"),
+        ("Derivados (valor razonable neto)", "B.7 sin pactos: valor razonable activo menos pasivo. Es lo que suma al "
+                                             "stock; el nocional va aparte"),
         ("Sin clasificar", "Codigos de instrumento que no calzan con ninguna clase; deberia ser 0"),
-        ("Total", "Suma de las clases (sin contar 'de la cual leasing' dos veces)")]]
-    stock_cols = [Col("RUT aseguradora", "rut_compania", "id", "RUT de la compania"),
-                  Col("Aseguradora", "aseguradora", "texto", "Nombre publicado en la CMF")] + cl + [
-        Col("Total declarado B.8", "Total declarado B.8", "mm",
-            "Total que declara la aseguradora en el B.8 (representativas + no representativas)", total=True),
-        Col("Diferencia vs B.8 (%)", "Diferencia vs B.8 (%)", "pct", "Total / total declarado - 1")]
+        ("Total", "Suma de las clases (sin contar 'de la cual leasing' dos veces). No incluye el nocional")]]
+    noc_actual = Col(f"Derivados: nocional, fuera del total (MM USD)", f"noc_{actual}", "mm",
+                     "Nocional de derivados, sin pactos. Informativo: NO suma al Total, porque el nocional es el "
+                     "tamano de referencia del contrato y no lo que vale", total=True)
     L.hoja(Hoja("Stock_Clase", "tbl_stock_clase", f"Stock por clase de activo - {actual}",
-                "Cuanto tiene invertido cada aseguradora en cada clase de activo.",
-                stock_cols, stock, total_etiqueta="Total industria (fuera de la tabla)"))
+                "Cuanto tiene invertido cada aseguradora en cada clase de activo. El nocional de derivados va al "
+                "final, aparte, y no suma al total.",
+                RUT_A + cl + [
+                    Col("Total declarado B.8", "Total declarado B.8", "mm",
+                        "Total que declara la aseguradora en el B.8 (representativas + no representativas)", total=True),
+                    Col("Diferencia vs B.8 (%)", "Diferencia vs B.8 (%)", "pct", "Total / total declarado - 1"),
+                    noc_actual],
+                stock, total_etiqueta="Total industria (fuera de la tabla)"))
 
     # --- comparativas --------------------------------------------------------------------
     per_cols = [Col(f"{k} (MM USD)", k, "mm",
@@ -376,30 +583,29 @@ def generar(periodo: int | None = None, salida: Path | None = None,
                     "Diferencia entre el periodo actual y el ultimo cierre de anio", total=True),
                 Col(f"Var. {base} a {actual} (%)", f"Var. {base} a {actual} (%)", "pct",
                     "Variacion porcentual, incluye efecto cambiario")]
+    noc_cols = [Col(f"Nocional derivados {k} (MM USD)", f"noc_{k}", "mm",
+                    f"Nocional de derivados (sin pactos) al cierre de {k}. Informativo: no suma al stock"
+                    + (" (no disponible)" if p is None else ""), total=True)
+                for k, p in periodos_noc.items()]
     L.hoja(Hoja("Comparativa", "tbl_comparativa", "Comparativa historica por aseguradora",
-                f"Stock total del periodo actual contra los cierres de anio, cada uno a su dolar de cierre.",
-                [Col("RUT aseguradora", "rut_compania", "id", "RUT de la compania"),
-                 Col("Aseguradora", "aseguradora", "texto", "Nombre publicado en la CMF")] + per_cols + var_cols,
+                "Stock total del periodo actual contra los cierres de anio, cada uno a su dolar de cierre. "
+                "Al final, el nocional de derivados de cada cierre, aparte.",
+                RUT_A + per_cols + var_cols + noc_cols,
                 comp_aseg, total_etiqueta="Total industria (fuera de la tabla)"))
     L.hoja(Hoja("Comparativa_Clase", "tbl_comparativa_clase", "Comparativa historica por clase de activo",
                 "Mismo cruce, abierto por clase de activo.",
-                [Col("RUT aseguradora", "rut_compania", "id", "RUT de la compania"),
-                 Col("Aseguradora", "aseguradora", "texto", "Nombre publicado en la CMF"),
-                 Col("Clase de activo", "clase", "texto", "Clase de activo")]
+                RUT_A + [Col("Clase de activo", "clase", "texto", "Clase de activo")]
                 + [Col(c.header, c.fuente, c.fmt, c.descripcion) for c in per_cols + var_cols],
                 comp_clase, congelar_cols=3))
 
-    # --- evolucion mensual ----------------------------------------------------------------------
+    # --- evolucion mensual del stock --------------------------------------------------------------
     ev_a, ev_c = D.evolucion_stock(ctx)
-    ev_da, ev_dc = D.evolucion_derivados(ctx)
     meses = [D.etiqueta_periodo(p) for p in D.periodos_disponibles(ctx)]
     nota_tc = "Cada mes al dolar observado de su propio cierre: la variacion incluye efecto cambiario."
 
     def cols_meses(que: str):
         return [Col(f"{m} (MM USD)", m, "mm", f"{que} al cierre de {m}", total=True) for m in meses]
 
-    RUT_A = [Col("RUT aseguradora", "rut_compania", "id", "RUT de la compania"),
-             Col("Aseguradora", "aseguradora", "texto", "Nombre publicado en la CMF")]
     L.hoja(Hoja("Evol_Stock", "tbl_evol_stock", "Evolucion mensual del stock por aseguradora",
                 f"Stock total mes a mes, {meses[0]} a {meses[-1]}. {nota_tc}",
                 RUT_A + cols_meses("Stock total"), ev_a,
@@ -409,17 +615,10 @@ def generar(periodo: int | None = None, salida: Path | None = None,
                 RUT_A + [Col("Clase de activo", "clase", "texto", "Clase de activo")]
                 + [Col(c.header, c.fuente, c.fmt, c.descripcion) for c in cols_meses("Stock de la clase")],
                 ev_c, congelar_cols=3))
-    L.hoja(Hoja("Evol_Deriv_Aseguradora", "tbl_evol_deriv_aseguradora",
-                "Evolucion mensual del nocional de derivados por aseguradora",
-                f"Suma lineal de nocionales, sin pactos. {nota_tc}",
-                RUT_A + cols_meses("Nocional de derivados (sin pactos)"), ev_da,
-                total_etiqueta="Total industria (fuera de la tabla)"))
-    L.hoja(Hoja("Evol_Deriv_Contraparte", "tbl_evol_deriv_contraparte",
-                "Evolucion mensual del nocional de derivados por contraparte legal",
-                f"Cada RUT o LEI es una entidad: filiales y matrices por separado. Sin pactos. {nota_tc}",
-                [C_CP[1], Col("Tipo ID", "entidad_tipo_id", "texto", "RUT, LEI, invalido o sin identificador"),
-                 C_CP[0], C_CP[2]] + cols_meses("Nocional de derivados con la entidad (sin pactos)"),
-                ev_dc, total_etiqueta="Total (fuera de la tabla)"))
+
+    # --- detalle tailor-made de las inversiones ----------------------------------------------------
+    for h in hojas_inversiones(ctx):
+        L.hoja(h)
 
     # --- derivados: resumenes ------------------------------------------------------------------
     fams = [f for f in D.FAMILIAS]
@@ -438,24 +637,19 @@ def generar(periodo: int | None = None, salida: Path | None = None,
     da = D.deriv_por_aseguradora(ops)
     L.hoja(Hoja("Deriv_Aseguradora", "tbl_deriv_aseguradora", "Derivados por aseguradora",
                 "Suma lineal de nocionales por aseguradora y por tipo de instrumento.",
-                [Col("RUT aseguradora", "rut_compania", "id", "RUT de la compania"),
-                 Col("Aseguradora", "aseguradora", "texto", "Nombre publicado en la CMF")] + cols_noc(da),
-                da, total_etiqueta="Total industria (fuera de la tabla)"))
+                RUT_A + cols_noc(da), da, total_etiqueta="Total industria (fuera de la tabla)"))
     dc = D.deriv_por_contraparte(ops)
     L.hoja(Hoja("Deriv_Contraparte", "tbl_deriv_contraparte", "Derivados por contraparte (entidad legal)",
                 "Cada RUT o LEI es una entidad: filiales y matrices por separado.",
                 [C_CP[1], Col("Tipo ID", "entidad_tipo_id", "texto", "RUT, LEI, invalido o sin identificador"),
                  C_CP[0], C_CP[2],
-                 Col("Fuente del nombre", "entidad_fuente_nombre", "texto", "GLEIF, catalogo o nombre informado"),
                  Col("Aseguradoras", "aseguradoras", "entero", "Aseguradoras con operaciones vigentes con la entidad")]
                 + cols_noc(dc) + [C_CP[3]],
                 dc, total_etiqueta="Total (fuera de la tabla)"))
     dx = D.deriv_aseg_x_contraparte(ops)
     L.hoja(Hoja("Deriv_Aseg_x_Contraparte", "tbl_deriv_aseg_contraparte", "Derivados: aseguradora por contraparte",
                 "Una fila por par aseguradora - entidad legal.",
-                [Col("RUT aseguradora", "rut_compania", "id", "RUT de la compania"),
-                 Col("Aseguradora", "aseguradora", "texto", "Nombre publicado en la CMF"),
-                 C_CP[1], C_CP[0]] + cols_noc(dx), dx, congelar_cols=2))
+                RUT_A + [C_CP[1], C_CP[0]] + cols_noc(dx), dx, congelar_cols=2))
     ds = D.deriv_por_subyacente(ops)
     L.hoja(Hoja("Deriv_Subyacente", "tbl_deriv_subyacente", "Derivados por activo subyacente",
                 "Nocional por subyacente: pares de monedas, tasa por indice, equity.",
@@ -468,58 +662,23 @@ def generar(periodo: int | None = None, salida: Path | None = None,
                  Col("MTM neto (MM USD)", "MTM neto (MM USD)", "mm", "Valor razonable neto", total=True)],
                 ds, total_etiqueta="Total (fuera de la tabla)"))
 
-    # --- hojas tailor-made -------------------------------------------------------------------------
+    # --- evolucion mensual de derivados -----------------------------------------------------------
+    ev_da, ev_dc = D.evolucion_derivados(ctx)
+    L.hoja(Hoja("Evol_Deriv_Aseguradora", "tbl_evol_deriv_aseguradora",
+                "Evolucion mensual del nocional de derivados por aseguradora",
+                f"Suma lineal de nocionales, sin pactos. {nota_tc}",
+                RUT_A + cols_meses("Nocional de derivados (sin pactos)"), ev_da,
+                total_etiqueta="Total industria (fuera de la tabla)"))
+    L.hoja(Hoja("Evol_Deriv_Contraparte", "tbl_evol_deriv_contraparte",
+                "Evolucion mensual del nocional de derivados por contraparte legal",
+                f"Cada RUT o LEI es una entidad: filiales y matrices por separado. Sin pactos. {nota_tc}",
+                [C_CP[1], Col("Tipo ID", "entidad_tipo_id", "texto", "RUT, LEI, invalido o sin identificador"),
+                 C_CP[0], C_CP[2]] + cols_meses("Nocional de derivados con la entidad (sin pactos)"),
+                ev_dc, total_etiqueta="Total (fuera de la tabla)"))
+
+    # --- hojas tailor-made de derivados --------------------------------------------------------------
     for h in hojas_instrumentos(ops):
         L.hoja(h)
-
-    # --- conciliacion Confuturo ------------------------------------------------------------------
-    ws = L.wb.create_sheet("Conciliacion_Confuturo")
-    L._encabezado(ws, "Conciliacion: libro de BBVA con Confuturo vs lo informado a la CMF",
-                  f"Periodo {actual}. Codifica la conciliacion validada sobre 202607 (21 de 28 filas cuadran).",
-                  "Montos del libro en su moneda original; montos CMF en MM$ y convertidos al tipo de cambio "
-                  "que informa la propia Confuturo.")
-    if conc is None:
-        ws["A6"] = f"No se encontro el libro de BBVA en {libro_bbva}"
-    else:
-        lb = conc["libro"]
-        cols_lb = [Col("Fila del libro", "fila_libro", "entero", "Fila en el Excel del libro de BBVA"),
-                   Col("GROUP", "GROUP", "texto", "Grupo en el libro: CS swap, REPO, FXD forward, BOND bono"),
-                   Col("B/S", "B/S", "texto", "Compra o venta segun el libro"),
-                   Col("Instrumento (libro)", "PL INSTRUMENT", "texto", "Instrumento segun el libro"),
-                   Col("Nominal 0", "NOMINAL 0", "num2", "Nominal 0 del libro, en CUR 0"),
-                   Col("CUR 0", "CUR 0", "texto", "Moneda del nominal 0"),
-                   Col("Nominal 1", "NOMINAL 1", "num2", "Nominal 1 del libro, en CUR 1"),
-                   Col("CUR 1", "CUR 1", "texto", "Moneda del nominal 1"),
-                   Col("Rate", lambda d: pd.to_numeric(d.RATE, errors="coerce"), "num2",
-                       "Tasa o precio segun el libro"),
-                   Col("Fecha operacion", "TRN.DATE", "fecha", "TRN.DATE del libro"),
-                   Col("Inicio", "START", "fecha", "START del libro"),
-                   Col("Vencimiento (libro)", "EXPIRY", "fecha", "EXPIRY tal como viene en el libro"),
-                   Col("Vencimiento corregido", "EXPIRY_CORREGIDA", "fecha",
-                       "EXPIRY con el siglo corregido cuando es anterior a la operacion"),
-                   Col("Resultado", "resultado", "texto", "Cuadra 1 a 1, cuadra como paquete o sin reflejo en la CMF"),
-                   Col("Contrapartida CMF", "contrapartida_cmf", "texto", "Folio(s) del B.7 de Confuturo"),
-                   Col("Detalle", "detalle", "texto_largo", "Como cuadra: fechas, tasas, montos y diferencia"),
-                   Col("Nota sobre el libro", "nota_datos_libro", "texto_largo",
-                       "Errores de datos detectados en el libro de BBVA")]
-        fila = L.tabla(ws, lb, cols_lb, "tbl_conciliacion", hoja="Conciliacion_Confuturo")
-        ws.freeze_panes = ws.cell(row=FILA_HEADER + 1, column=3)
-        res = conc["resumen"].rename(columns={"GROUP": "Grupo", "resultado": "Resultado", "filas": "Filas"})
-        fila = L.tabla(ws, res, [Col("Grupo", "Grupo", "texto", "Grupo del libro"),
-                                 Col("Resultado", "Resultado", "texto", "Resultado de la conciliacion"),
-                                 Col("Filas", "Filas", "entero", "Filas del libro")],
-                       "tbl_conciliacion_resumen", fila=fila + 3, hoja="Conciliacion_Confuturo")
-        sl = conc["cmf_sin_libro"]
-        L.tabla(ws, sl, [Col("Folio CMF", "folio_operacion", "texto", "Folio del B.7 de Confuturo"),
-                         Col("Producto", "producto", "texto", "Producto del B.7"),
-                         Col("Instrumento", "instrumento", "texto", "Clasificacion del warehouse"),
-                         Col("Contraparte", "contraparte_nombre", "texto", "Contraparte segun el catalogo"),
-                         Col("Fecha operacion", "fecha_operacion", "fecha", "Fecha de operacion informada"),
-                         Col("Fecha vencimiento", "fecha_vencimiento", "fecha", "Vencimiento informado"),
-                         Col("Items", "items", "entero", "Items del folio"),
-                         Col("Nocional (MM$)", "nocional_mm_pesos", "num2", "Nocional informado, millones de pesos"),
-                         Col("Nota", "nota", "texto_largo", "Por que no esta en el libro")],
-                "tbl_conciliacion_cmf_sin_libro", fila=fila + 3, hoja="Conciliacion_Confuturo")
 
     # --- calidad de contrapartes ---------------------------------------------------------------------
     cq = D.calidad_contrapartes(ops)
