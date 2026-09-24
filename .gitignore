@@ -44,6 +44,10 @@ warehouse/data/
 *.zip
 Archivos completos ZIP CMF/
 *.TXT
+# El patron de arriba es para los archivos crudos de la CMF, pero con un disco
+# que no distingue mayusculas tambien tapaba los requirements*.txt, y
+# requirements-dev.txt nunca se habia versionado.
+!requirements*.txt
 
 # ---------------------------------------------------------------------------
 #  Salidas de corridas y exportaciones
@@ -61,3 +65,6 @@ Archivos completos ZIP CMF/
 .env
 *.pem
 *.key
+
+# Salida generada por python -m reportes: se regenera, no se versiona.
+reportes/salida/

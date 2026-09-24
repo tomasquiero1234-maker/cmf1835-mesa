@@ -350,7 +350,14 @@ class RowBuilder:
         )
         row = r.to_row()
         row["contraparte_rut"] = _num(f.get("RUT_CONTRAPARTE_NACIONAL"))
+        # El DV permite validar el RUT (modulo 11) sin depender del catalogo.
+        row["contraparte_dv"] = _txt(f.get("DV_CONTRAPARTE_NACIONAL"))
         row["contraparte_lei"] = _txt(f.get("LEI_CONTRAPARTE_EXTRANJERA"))
+        # El nombre tal como lo escribio la aseguradora. contraparte_nombre es
+        # el del catalogo; sin este no se puede ver que alguien informo
+        # "DEUTSCHE BANK LONDON" con el LEI de otra entidad.
+        row["contraparte_nombre_informado"] = _txt(
+            f.get("NOMBRE") or f.get("NOMBRE_CONTRAPARTE_GARANTIA"))
         return row
 
     def derivado(self, rec: ParsedRecord, zip_origen: str, descargado: str,
@@ -690,6 +697,56 @@ class RowBuilder:
         })
         return row
 
+    #: Flags del tipo de inmueble del B.4, en el orden del anexo. Cada uno es
+    #: S o N; un mismo rol puede ser a la vez local, oficina y bodega.
+    _BR_TIPOS = ("LOCAL", "OFICINA", "BODEGA", "ESTACIONAMIENTO", "TERRENO", "CASA",
+                 "EDIFICIO", "PISO_COMPLETO_DE_EDIFICIO", "PISO_INCOMPLETO_DE_EDIFICIO",
+                 "DEPARTAMENTO", "OBRA_EN_CONSTRUCCION", "OTROS")
+
+    def bienes_raices(self, rec: ParsedRecord, zip_origen: str, descargado: str,
+                      veredicto: Any) -> dict[str, Any]:
+        """Bienes raices (B.4): propios (BZ) y dados en leasing (CLEAS)."""
+        f = rec.fields
+        row = self._base(rec, zip_origen, descargado)
+        tipos = [t.lower() for t in self._BR_TIPOS if _txt(f.get(t)) == "S"]
+        row.update({
+            "rol": _txt(f.get("ROL")),
+            "tipo_instrumento": _txt(f.get("TIPO_INSTRUMENTO")),
+            "nemotecnico": _txt(f.get("CODIGO_NEMOTECNICO")),
+            # Los doce flags se guardan compactos: una lista legible en vez de
+            # doce columnas S/N que casi siempre dicen N.
+            "tipo_inmueble": ",".join(tipos) or None,
+            "desarrollo_avance": _txt(f.get("DESARROLLO_AVANCE")),
+            "urbano": _txt(f.get("TIPO_DE_INMUEBLE")),
+            "destino": _txt(f.get("DESTINO")),
+            "uso": _txt(f.get("USO")),
+            "porcentaje_uso_propio": _num(f.get("PORCENTAJE_USO_PROPIO")),
+            "arrendatario": _txt(f.get("ARRENDATARIO")),
+            "relacionado": _txt(f.get("RELACIONADO")),
+            "saldo_plazo_arriendo_meses": _num(f.get("SALDO_PLAZO_ARRIENDO")),
+            "monto_arriendo_uf": _num(f.get("MONTO_ARRIENDO")),
+            "comuna": _txt(f.get("COMUNA")),
+            "ciudad": _txt(f.get("CIUDAD")),
+            "fecha_compra": f.get("FECHA_DE_COMPRA"),
+            "costo_actualizado": _num(f.get("COSTO_ACTUALIZADO")),
+            "depreciacion_acumulada": _num(f.get("DEPRECIACION_ACUMULADA")),
+            "vida_util_restante_meses": _num(f.get("PLAZO")),
+            "costo_corregido": _num(f.get("COSTO_CORREGIDO_Y_DEPRECIADO")),
+            "tasacion_1": _num(f.get("TASACION_1")),
+            "tasacion_2": _num(f.get("TASACION_2")),
+            "fecha_tasacion_1": f.get("FECHA_TASACION_1"),
+            "fecha_tasacion_2": f.get("FECHA_TASACION_2"),
+            "m2_terreno": _num(f.get("TOTAL_M2_TERRENO")),
+            "m2_construccion": _num(f.get("TOTAL_M2_CONSTRUCCION")),
+            "deterioro": _num(f.get("DETERIORO")),
+            "valor_final": _num(f.get("VALOR_FINAL")),
+            "copropiedad_pct": _num(f.get("COPROPIETARIA")),
+            "prohibicion_o_gravamen": _txt(f.get("PROHIBICION_O_GRAVAMEN")),
+            "nombre_cartera": _txt(f.get("NOMBRE_CARTERA")),
+            "veredicto": veredicto.verdict.value,
+        })
+        return row
+
     def control(self, rec: ParsedRecord, zip_origen: str, descargado: str,
                 veredicto: Any) -> dict[str, Any]:
         """Informacion de control (B.8): totales por tipo de inversion.
@@ -771,19 +828,30 @@ class Loader:
 
     #: Letras que el loader despacha a una tabla. El resto se salta a
     #: proposito y la auditoria de fidelidad las cuenta aparte.
-    LETRAS_CARGADAS = frozenset({"I", "P", "G", "A", "F", "X", "O", "C"})
+    LETRAS_CARGADAS = frozenset({"I", "P", "G", "A", "F", "X", "O", "C", "B"})
 
     #: Tipos de registro que llevan detalle, por letra. Lo demas es cabecera
     #: o trailer.
     DETALLE = {"I": {"2"}, "P": {"2", "3", "4", "5", "6"}, "G": {"2"},
-               "A": {"2"}, "F": {"2"}, "X": {"2", "3"}, "O": {"2"}, "C": {"2"}}
+               "A": {"2"}, "F": {"2"}, "X": {"2", "3"}, "O": {"2"}, "C": {"2"},
+               "B": {"2"}}
 
     HECHOS = ("fact_derivado", "fact_renta_fija", "fact_garantia", "fact_cuarentena",
               "fact_equity", "fact_fondo", "fact_extranjero_rf", "fact_extranjero_rv",
-              "fact_otras_inv", "fact_control", "dim_compania_src")
+              "fact_otras_inv", "fact_control", "fact_bienes_raices", "dim_compania_src")
 
-    def __init__(self, out: Path, *, layouts: Path = LAYOUTS, entities: Path = ENTITIES) -> None:
+    def __init__(self, out: Path, *, layouts: Path = LAYOUTS, entities: Path = ENTITIES,
+                 letras: frozenset[str] | None = None) -> None:
+        """
+        Args:
+            letras: Si se da, carga SOLO esas letras (carga parcial). Sirve para
+                sumar un anexo nuevo sin re-procesar ni tocar los demas: los
+                archivos se escriben con sufijo propio y dim_compania_src no se
+                reescribe, porque desde un solo anexo quedaria incompleta.
+        """
         self.out = out
+        self.letras = frozenset(letras) & self.LETRAS_CARGADAS if letras else self.LETRAS_CARGADAS
+        self.parcial = letras is not None
         self.engine = FixedWidthEngine.from_yaml(layouts)
         self.validator = ArithmeticValidator()
         self.resolver = EntityResolver.from_yaml(entities)
@@ -805,7 +873,7 @@ class Loader:
                     spec, _rut, _per = self.engine.describe(base)
                 except UnknownFileTypeError:
                     continue
-                if spec.letter not in self.LETRAS_CARGADAS:
+                if spec.letter not in self.letras:
                     continue
                 for rec in self.engine.parse_file(base, data=z.read(info)):
                     # La generacion vieja (pre 202412) tiene otro largo de
@@ -824,6 +892,10 @@ class Loader:
         # El nombre de la aseguradora vive en el registro de identificacion,
         # no en el detalle. Sin el, el Whitespace Map muestra RUT desnudos.
         if t == "1":
+            # En carga parcial la dimension no se toca: escrita desde un solo
+            # anexo pisaria la lista completa de companias de ese ZIP.
+            if self.parcial:
+                return None
             return "dim_compania_src", {
                 "rut_compania": rec.rut_compania,
                 "nombre": _txt(rec.fields.get("NOMBRE")),
@@ -864,6 +936,12 @@ class Loader:
             v = self.validator.validate(L, t, rec.fields,
                                         untrusted=rec.untrusted, periodo=rec.periodo)
             return "fact_fondo", self.build.fondo(rec, zip_origen, descargado, v)
+        if L == "B" and t == "2":
+            v = self.validator.validate(L, t, rec.fields,
+                                        untrusted=rec.untrusted, periodo=rec.periodo)
+            if v.verdict is Verdict.QUARANTINE:
+                return "fact_cuarentena", self.build.cuarentena(rec, zip_origen, descargado, v)
+            return "fact_bienes_raices", self.build.bienes_raices(rec, zip_origen, descargado, v)
         if L == "G" and t == "2":
             v = self.validator.validate(L, t, rec.fields,
                                         untrusted=rec.untrusted, periodo=rec.periodo)
@@ -893,9 +971,19 @@ class Loader:
                 # El nombre lleva el ZIP de origen: dos publicaciones del mismo
                 # periodo conviven en la particion en vez de pisarse.
                 slug = re.sub(r"[^A-Za-z0-9]+", "_", zp.stem).strip("_")
+                if self.parcial:
+                    # Archivo propio: la cuarentena de este ZIP ya tiene uno de
+                    # la carga completa, y pisarlo borraria las demas letras.
+                    nombre = f"{slug}__{''.join(sorted(self.letras))}.parquet"
+                else:
+                    nombre = f"{slug}.parquet"
+                    # Una carga completa ya incluye lo que traian las parciales
+                    # de este ZIP; si quedaran, las filas saldrian duplicadas.
+                    for viejo in destino.glob(f"{slug}__*.parquet"):
+                        viejo.unlink()
                 pq.write_table(
                     pa.Table.from_pylist(filas),
-                    destino / f"{slug}.parquet",
+                    destino / nombre,
                     compression="zstd",
                 )
         return dict(self.contadores)
@@ -920,6 +1008,7 @@ CREATE OR REPLACE VIEW raw_fondo      AS SELECT * FROM read_parquet('{root}/fact
 CREATE OR REPLACE VIEW raw_extranjero_rf AS SELECT * FROM read_parquet('{root}/fact_extranjero_rf/*/*.parquet', union_by_name=true, hive_partitioning=true);
 CREATE OR REPLACE VIEW raw_extranjero_rv AS SELECT * FROM read_parquet('{root}/fact_extranjero_rv/*/*.parquet', union_by_name=true, hive_partitioning=true);
 CREATE OR REPLACE VIEW raw_otras_inv     AS SELECT * FROM read_parquet('{root}/fact_otras_inv/*/*.parquet',     union_by_name=true, hive_partitioning=true);
+CREATE OR REPLACE VIEW raw_bienes_raices AS SELECT * FROM read_parquet('{root}/fact_bienes_raices/*/*.parquet', union_by_name=true, hive_partitioning=true);
 CREATE OR REPLACE VIEW raw_control       AS SELECT * FROM read_parquet('{root}/fact_control/*/*.parquet',       union_by_name=true, hive_partitioning=true);
 CREATE OR REPLACE VIEW raw_cuarentena AS SELECT * FROM read_parquet('{root}/fact_cuarentena/*/*.parquet', union_by_name=true, hive_partitioning=true);
 
@@ -1007,6 +1096,14 @@ JOIN publicacion_vigente v
 CREATE OR REPLACE VIEW fact_extranjero_rf AS SELECT * FROM raw_extranjero_rf;
 CREATE OR REPLACE VIEW fact_extranjero_rv AS SELECT * FROM raw_extranjero_rv;
 CREATE OR REPLACE VIEW fact_otras_inv     AS SELECT * FROM raw_otras_inv;
+-- A diferencia de las vistas de arriba, esta si filtra la publicacion vigente:
+-- nace despues de detectar que las otras cuentan dos veces un periodo con dos
+-- publicaciones (202608). Las de arriba no se tocan para no mover el dashboard.
+CREATE OR REPLACE VIEW fact_bienes_raices AS
+SELECT r.* FROM raw_bienes_raices r
+JOIN publicacion_vigente v
+  ON v.periodo_informacion = r.periodo_informacion
+ AND v.zip_origen = r.zip_origen AND v.recencia = 1;
 CREATE OR REPLACE VIEW fact_control       AS SELECT * FROM raw_control;
 CREATE OR REPLACE VIEW fact_equity     AS SELECT * FROM raw_equity;
 CREATE OR REPLACE VIEW fact_fondo      AS SELECT * FROM raw_fondo;
@@ -1116,7 +1213,7 @@ def construir_duckdb(out: Path, db: Path) -> dict[str, int]:
 
     conteos: dict[str, int] = {}
     for t in ("dim_emisor", "fact_derivado", "fact_renta_fija", "fact_extranjero_rf", "fact_extranjero_rv",
-              "fact_equity", "fact_fondo", "fact_otras_inv", "fact_control",
+              "fact_equity", "fact_fondo", "fact_otras_inv", "fact_control", "fact_bienes_raices",
               "fact_garantia", "fact_cuarentena",
               "dim_periodo", "dim_compania", "dim_contraparte", "dim_instrumento"):
         try:
@@ -1140,6 +1237,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--db", type=Path, default=None, help="Ruta del archivo DuckDB.")
     p.add_argument("--solo-esquema", action="store_true",
                    help="No recarga el Parquet; solo reconstruye el esquema.")
+    p.add_argument("--letras", help="Carga parcial: solo estas letras (ej. B). No toca "
+                                    "los archivos de la carga completa.")
     p.add_argument("-v", "--verbose", action="store_true")
     a = p.parse_args(argv)
 
@@ -1156,7 +1255,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f"No hay ZIP en {a.data}", file=sys.stderr)
             return 2
         print(f"Cargando {len(zips)} ZIP a {a.out}")
-        loader = Loader(a.out)
+        letras = frozenset(a.letras.upper().replace(",", "")) if a.letras else None
+        loader = Loader(a.out, letras=letras)
         conteos = loader.cargar(zips)
         print("\nFilas escritas por hecho:")
         for t, n in conteos.items():

@@ -670,19 +670,19 @@ files:
         name: DETALLE
         fields:
         - {name: "TIPO", pic: "9(01)", start: 0, len: 1, kind: num, dec: 0, signed: false, prov: official}
-        - {name: "ROLDESCRIPCION_DEL_INMUEBLE", pic: "X(11)", start: 1, len: 11, kind: text, dec: 0, signed: false, prov: official}
-        - {name: "CAMPO_12", pic: "X(01)", start: 12, len: 1, kind: text, dec: 0, signed: false, prov: official}
-        - {name: "CAMPO_13", pic: "X(01)", start: 13, len: 1, kind: text, dec: 0, signed: false, prov: official}
-        - {name: "CAMPO_14", pic: "X(01)", start: 14, len: 1, kind: text, dec: 0, signed: false, prov: official}
-        - {name: "CAMPO_15", pic: "X(01)", start: 15, len: 1, kind: text, dec: 0, signed: false, prov: official}
-        - {name: "CAMPO_16", pic: "X(01)", start: 16, len: 1, kind: text, dec: 0, signed: false, prov: official}
-        - {name: "CAMPO_17", pic: "X(01)", start: 17, len: 1, kind: text, dec: 0, signed: false, prov: official}
-        - {name: "CAMPO_18", pic: "X(01)", start: 18, len: 1, kind: text, dec: 0, signed: false, prov: official}
-        - {name: "CAMPO_19", pic: "X(01)", start: 19, len: 1, kind: text, dec: 0, signed: false, prov: official}
-        - {name: "CAMPO_20", pic: "X(01)", start: 20, len: 1, kind: text, dec: 0, signed: false, prov: official}
-        - {name: "CAMPO_21", pic: "X(01)", start: 21, len: 1, kind: text, dec: 0, signed: false, prov: official}
-        - {name: "CAMPO_22", pic: "X(01)", start: 22, len: 1, kind: text, dec: 0, signed: false, prov: official}
-        - {name: "CAMPO_23", pic: "X(01)", start: 23, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "ROL", pic: "X(11)", start: 1, len: 11, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "LOCAL", pic: "X(01)", start: 12, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "OFICINA", pic: "X(01)", start: 13, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "BODEGA", pic: "X(01)", start: 14, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "ESTACIONAMIENTO", pic: "X(01)", start: 15, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "TERRENO", pic: "X(01)", start: 16, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "CASA", pic: "X(01)", start: 17, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "EDIFICIO", pic: "X(01)", start: 18, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "PISO_COMPLETO_DE_EDIFICIO", pic: "X(01)", start: 19, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "PISO_INCOMPLETO_DE_EDIFICIO", pic: "X(01)", start: 20, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "DEPARTAMENTO", pic: "X(01)", start: 21, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "OBRA_EN_CONSTRUCCION", pic: "X(01)", start: 22, len: 1, kind: text, dec: 0, signed: false, prov: official}
+        - {name: "OTROS", pic: "X(01)", start: 23, len: 1, kind: text, dec: 0, signed: false, prov: official}
         - {name: "DESARROLLO_AVANCE", pic: "X(02)", start: 24, len: 2, kind: text, dec: 0, signed: false, prov: official}
         - {name: "TIPO_GESTION", pic: "X(01)", start: 26, len: 1, kind: text, dec: 0, signed: false, prov: official}
         - {name: "TIPO_DE_INMUEBLE", pic: "X(02)", start: 27, len: 2, kind: text, dec: 0, signed: false, prov: official}

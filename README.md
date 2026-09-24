@@ -105,3 +105,23 @@ campos en vez de rellenarlos con nulos; son 1.225.162 registros de
 - Anexo B.10 (tablas de desarrollo): cerraria la identidad nominal/vigente
   de renta fija, hoy no evaluable
 - Layout de la generacion vieja, para recuperar los 12 meses de 202312-202411
+
+## Reporte Excel de stock (`reportes/`)
+
+Modulo paralelo al dashboard: lee el warehouse en solo-lectura y no importa ni
+modifica nada de `app/`. Genera un Excel estatico con el stock (sin flujos) de
+cada aseguradora en USD, la comparativa contra los cierres de anio, los
+derivados por aseguradora, por contraparte legal y por subyacente, una hoja
+tailor-made por tipo de derivado y la conciliacion de Confuturo.
+
+```bash
+python -m utils.fetch_usd       # dolar observado de cierre, a disco
+python -m utils.fetch_gleif     # nombre legal de cada LEI, a disco
+python -m reportes              # reportes/salida/stock_aseguradoras_AAAAMM.xlsx
+python -m tests.reporte_excel   # 21 controles contra la fuente
+```
+
+Para automatizar su lectura: cada hoja tiene una tabla de Excel con nombre
+(`tbl_*`) que empieza en la fila 6; leer por nombre de tabla. Lo que se ve es lo
+que se guarda (un 7,2% es 7,2; los montos estan en millones de USD). La hoja
+`Diccionario` define cada columna.

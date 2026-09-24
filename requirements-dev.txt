@@ -1,0 +1,11 @@
+# Todo lo anterior mas lo necesario para regenerar el warehouse desde los ZIP
+# de la CMF: parseo de layouts, transcripcion del anexo en PDF y escritura de
+# Parquet. Nada de esto corre en la nube.
+-r requirements.txt
+
+PyYAML>=6.0
+pdfplumber>=0.11
+pyarrow>=15
+
+# Reporte Excel estatico (reportes/). Ya venia instalado; se declara.
+openpyxl>=3.1

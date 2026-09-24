@@ -65,7 +65,7 @@ DB = DEFAULT_OUT / "cmf1835.duckdb"
 #: perdida, es una linea guardada con su veredicto y su texto crudo.
 TABLAS = ("raw_derivado", "raw_renta_fija", "raw_extranjero_rf", "raw_extranjero_rv",
           "raw_equity", "raw_fondo", "raw_otras_inv", "raw_control",
-          "raw_garantia", "raw_cuarentena")
+          "raw_garantia", "raw_bienes_raices", "raw_cuarentena")
 
 
 def contabilidad(zpath: Path, loader: Loader) -> tuple[Counter, int]:

@@ -291,8 +291,77 @@ class ArithmeticValidator:
             ("P", "3"): [self.check_forward_notional, self.check_forward_mtm],
             ("I", "2"): [self.check_bond_tenor, self.check_bond_nominal_vigente,
                          self.check_uf_valor_comercial],
+            ("B", "2"): [self.check_br_costo_corregido, self.check_br_valor_final],
         }
         return table.get(key, [])
+
+    # -- B.4 registro 2: BIENES RAICES --------------------------------------
+
+    #: Tolerancia absoluta de las identidades del B.4. Todos los montos vienen
+    #: en M$ enteros, asi que la unica diferencia legitima es el redondeo: 1 M$.
+    BR_TOL_M = Decimal(1)
+
+    #: Tipo de instrumento de un bien raiz dado en leasing. Su valor final
+    #: depende de un monto que vive en el B.1, no en este registro.
+    BR_LEASING = "CLEAS"
+
+    def check_br_costo_corregido(
+        self, f: Mapping[str, Any], periodo: int | None = None
+    ) -> CheckResult:
+        """COSTO_CORREGIDO_Y_DEPRECIADO = COSTO_ACTUALIZADO - DEPRECIACION_ACUMULADA.
+
+        Identidad declarada literalmente en el Anexo B.4 ("corresponde a la
+        diferencia entre el costo actualizado del bien raiz y la depreciacion
+        acumulada"). Medida sobre los datos reales: 23.011 de 23.012 bienes
+        raices propios y 12.432 de 12.432 leasing en 202608.
+        """
+        rule = "bienes_raices.costo_corregido = costo_actualizado - depreciacion"
+        ca = _dec(f.get("COSTO_ACTUALIZADO"))
+        cc = _dec(f.get("COSTO_CORREGIDO_Y_DEPRECIADO"))
+        if ca is None or cc is None:
+            return CheckResult(rule, None, detail="Faltan costo actualizado o corregido")
+        esperado = ca - (_dec(f.get("DEPRECIACION_ACUMULADA")) or Decimal(0))
+        return CheckResult(rule, abs(cc - esperado) <= self.BR_TOL_M,
+                           esperado, cc, "tolerancia 1 M$")
+
+    def check_br_valor_final(
+        self, f: Mapping[str, Any], periodo: int | None = None
+    ) -> CheckResult:
+        """Valor final contra el costo corregido y la menor tasacion.
+
+        Bien raiz propio: VALOR_FINAL = min(costo corregido, menor tasacion).
+        Es la regla de valorizacion vigente y cierra exacta: 22.927 de 22.927
+        registros con tasacion en 202608 y 19.235 de 19.235 en 202412.
+
+        Leasing (CLEAS): el anexo define el valor final como el menor entre el
+        valor del contrato informado en el B.1, el valor contable de este
+        archivo y la menor tasacion. El primer termino no esta en el registro,
+        asi que solo se puede exigir la cota superior:
+
+            VALOR_FINAL <= min(costo corregido, menor tasacion)
+
+        Se cumple en 12.403 de 12.432 contratos en 202608. Los 29 que no, son
+        valores finales por sobre la tasacion: la compania no aplico el tope
+        que el propio anexo le exige, y van a cuarentena con su linea cruda.
+        """
+        rule = "bienes_raices.valor_final vs min(costo_corregido, menor_tasacion)"
+        vf = _dec(f.get("VALOR_FINAL"))
+        cc = _dec(f.get("COSTO_CORREGIDO_Y_DEPRECIADO"))
+        if vf is None or cc is None:
+            return CheckResult(rule, None, detail="Faltan valor final o costo corregido")
+        tasaciones = [t for t in (_dec(f.get("TASACION_1")), _dec(f.get("TASACION_2")))
+                      if t is not None and t > 0]
+        leasing = str(f.get("TIPO_INSTRUMENTO") or "").strip() == self.BR_LEASING
+
+        if leasing:
+            tope = min([cc, *tasaciones])
+            return CheckResult(rule, vf <= tope + self.BR_TOL_M, tope, vf,
+                               "leasing: cota superior, el tercer termino vive en el B.1")
+        if not tasaciones:
+            return CheckResult(rule, None, detail="Bien raiz sin tasacion informada")
+        esperado = min(cc, min(tasaciones))
+        return CheckResult(rule, abs(vf - esperado) <= self.BR_TOL_M, esperado, vf,
+                           "tolerancia 1 M$")
 
     # -- B.7 registro 3: FORWARDS -------------------------------------------
 
