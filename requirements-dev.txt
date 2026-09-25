@@ -9,3 +9,7 @@ pyarrow>=15
 
 # Reporte Excel estatico (reportes/). Ya venia instalado; se declara.
 openpyxl>=3.1
+
+# Informe BI de derivados (reportes/informe.py): plantilla HTML. Plotly ya esta
+# en requirements.txt; el PDF lo imprime Chrome, fuera de Python.
+Jinja2>=3.1

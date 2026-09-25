@@ -113,17 +113,39 @@ modifica nada de `app/`. Genera un Excel estatico con el stock (sin flujos) de
 cada aseguradora en USD: por clase de activo, contra los cierres de anio y mes a
 mes; una hoja tailor-made por clase de activo (renta fija nacional e
 internacional, acciones, ETF, fondos, real estate, otras) y por tipo de
-derivado; y los derivados por aseguradora, contraparte legal y subyacente. El
-nocional de derivados va en columnas aparte: no suma al stock.
+derivado; los derivados por aseguradora, contraparte legal y subyacente; y la
+originacion mensual y las camadas de derivados (hojas `Originacion`,
+`Camadas_Resumen` y `Camadas`), siguiendo cada operacion por las fotos
+mensuales. El nocional de derivados va en columnas aparte: no suma al stock.
 
 ```bash
 python -m utils.fetch_usd       # dolar observado de cierre, a disco
 python -m utils.fetch_gleif     # nombre legal de cada LEI, a disco
 python -m reportes              # reportes/salida/stock_aseguradoras_AAAAMM.xlsx
-python -m tests.reporte_excel   # controles contra la fuente (45)
+python -m tests.reporte_excel   # controles contra la fuente
 ```
 
 Para automatizar su lectura: cada hoja tiene una tabla de Excel con nombre
 (`tbl_*`) que empieza en la fila 6; leer por nombre de tabla. Lo que se ve es lo
 que se guarda (un 7,2% es 7,2; los montos estan en millones de USD). La hoja
 `Diccionario` define cada columna.
+
+### Informe BI de derivados (`reportes/informe.py`)
+
+Informe formal para la mesa de dinero, en HTML interactivo y PDF (A4
+apaisado). Lee SOLO las tablas `tbl_*` del Excel anterior: no abre el
+warehouse, asi que cualquiera con el Excel lo reproduce.
+
+```bash
+python -m reportes.informe              # reportes/salida/informe_derivados_AAAAMM.html y .pdf
+python -m reportes.informe --sin-pdf    # solo HTML
+python -m tests.informe                 # controles (genera un Excel nuevo, ~50 s)
+```
+
+Secciones: league table del mes por grupo y por instrumento; composicion del
+volumen de 12 meses; participacion del Grupo BBVA contra los competidores (mes,
+3M, 12M y stock) con drill-down por entidad legal; tramos de plazo con la tasa
+al pactar ponderada; y camadas (originado, tasa y vivo hoy por mes de origen,
+curvas de decaimiento y libro CCS por anio). Todo sobre nocional en USD de
+operaciones vigentes, sin MtM. El PDF lo imprime Chrome sin interfaz (`--chrome`
+o la variable `CHROME` si no esta en la ruta estandar).

@@ -11,7 +11,9 @@ Cada control verifica una afirmacion que el reporte hace, contra la fuente:
   5. entidades legales: una fila por RUT o LEI, sin fusionar identificadores;
   6. conciliacion Confuturo: reproduce EXACTO el resultado validado en 202607;
   7. cuadratura contra el B.8 dentro de +-3% en la industria;
-  8. el dashboard no se toco.
+  8. el dashboard no se toco;
+  10. originacion y camadas: cuadran con las hojas de detalle, lo vivo nunca
+      sube y la tasa de los CCS es comparable entre convenciones.
 
     python -m tests.reporte_excel
 """
@@ -25,6 +27,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+import numpy as np  # noqa: E402
 import openpyxl  # noqa: E402
 import pandas as pd  # noqa: E402
 
@@ -212,6 +215,52 @@ def main() -> int:
     rf = leer_tabla(wb, "Renta_Fija", "tbl_renta_fija")
     check(set(rf.Ambito) == {"Nacional", "Internacional"} and "CLEAS" not in set(rf["Tipo instrumento"]),
           "Renta_Fija trae nacional e internacional, y el leasing no (va en Real_Estate)")
+
+    print("\n[10] originacion y camadas")
+    det = []
+    for h, t in fams.items():
+        x = leer_tabla(wb, h, t)
+        det.append(pd.DataFrame({"hoja": h, "grupo": x["Grupo contraparte"],
+                                 "noc": pd.to_numeric(x["Nocional (MM USD)"]),
+                                 "fo": pd.to_datetime(x["Fecha operacion"]),
+                                 "fv": pd.to_datetime(x["Fecha vencimiento"]),
+                                 "plazo": pd.to_numeric(x["Plazo original (dias)"])}))
+    det = pd.concat(det, ignore_index=True)
+    det["mes"] = det.fo.dt.year * 100 + det.fo.dt.month
+    check(det.grupo.notna().all() and (det.grupo != "").all(),
+          f"'Grupo contraparte' completo en las {len(det):,} operaciones de las hojas de derivados")
+    check(bool((det.plazo == (det.fv - det.fo).dt.days).all()),
+          "'Plazo original (dias)' = vencimiento - fecha de operacion, en todas las operaciones")
+    orig = leer_tabla(wb, "Originacion", "tbl_originacion")
+    res = leer_tabla(wb, "Camadas_Resumen", "tbl_camadas_resumen")
+    cam = leer_tabla(wb, "Camadas", "tbl_camadas")
+    a_ = det[det.mes == ctx.periodo].noc.sum()
+    b_ = pd.to_numeric(orig[orig["Mes origen"] == ctx.periodo]["Nocional originado (MM USD)"]).sum()
+    check(abs(a_ - b_) < 1e-6, f"originacion de {D.etiqueta_periodo(ctx.periodo)}: tbl_originacion {b_:,.4f} = "
+                               f"operaciones vigentes con esa fecha de operacion {a_:,.4f} MM USD")
+    ro = res.groupby("Mes origen")["Nocional originado (MM USD)"].sum()
+    oo = orig.groupby("Mes origen")["Nocional originado (MM USD)"].sum()
+    check((ro - oo.reindex(ro.index)).abs().max() < 1e-6, "Camadas_Resumen = Originacion, mes de origen a mes")
+    desde = int(res["Mes origen"].min())
+    vivas = int(res["Operaciones vivas hoy"].sum())
+    check(vivas == int((det.mes >= desde).sum()),
+          f"operaciones vivas hoy de las camadas ({vivas:,}) = operaciones vigentes con fecha desde {desde}")
+    k = ["Instrumento", "Subyacente", "Mes origen"]
+    sube = cam.sort_values(k + ["Foto"]).groupby(k)["Nocional vivo (MM USD)"].diff().max()
+    check((pd.isna(sube) or sube <= 1e-9)
+          and (cam["Nocional vivo (MM USD)"] <= cam["Nocional originado (MM USD)"] + 1e-9).all(),
+          "lo vivo de cada camada nunca sube entre fotos ni supera lo originado")
+    ult = cam[cam.Foto == ctx.periodo].set_index(k)["Nocional vivo (MM USD)"]
+    hoy = res.set_index(k)["Nocional vivo hoy (MM USD)"]
+    check((ult - hoy.reindex(ult.index)).abs().max() < 1e-6, "Camadas en la ultima foto = vivo hoy del resumen")
+    ccs = leer_tabla(wb, "CCS", "tbl_ccs")
+    dif = pd.to_numeric(ccs["Diferencial compuesto moneda 1 vs 2 (pb)"])
+    tl, tc = pd.to_numeric(ccs["Tasa pata larga (%)"]), pd.to_numeric(ccs["Tasa pata corta (%)"])
+    plana = (ccs.Cruce == "UF/USD") & dif.notna() & (
+        ((ccs["Moneda recibe"] == "USD") & (tl == 0)) | ((ccs["Moneda entrega"] == "USD") & (tc == 0)))
+    uf = pd.Series(np.where(ccs["Moneda recibe"] == "UF", tl, tc), index=ccs.index)
+    check(plana.sum() > 0 and (dif[plana] - uf[plana] * 100).abs().max() < 1e-9,
+          f"CCS UF/USD con pata USD plana ({int(plana.sum())}): el diferencial es exactamente la tasa UF")
 
     print("\n[8] el dashboard no se toco")
     diff = subprocess.run(["git", "diff", "--quiet", "HEAD", "--", "app/dashboard.py"], cwd=ROOT)

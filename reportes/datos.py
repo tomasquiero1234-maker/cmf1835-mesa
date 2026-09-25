@@ -322,6 +322,35 @@ def _subyacente(r) -> str:
     return "Otro"
 
 
+def _clasificar(df: pd.DataFrame) -> pd.DataFrame:
+    """Familia y subyacente de cada operacion. Unica fuente de la regla, para
+    que la foto del periodo y la historia de camadas clasifiquen igual."""
+    df["familia"] = df["instrumento"].map(_familia)
+    df["subyacente"] = df.apply(_subyacente, axis=1)
+    # Un forward UF contra pesos es un forward de inflacion aunque la
+    # aseguradora lo informe con subyacente "moneda extranjera": va con los
+    # Forward UF, donde aplica la inflacion implicita. La etiqueta original
+    # queda en `instrumento`.
+    df.loc[(df.familia == "Forward FX") & (df.subyacente == "UF/CLP"), "familia"] = "Forward UF"
+    return df
+
+
+def _nombres_grupo() -> dict[str, str]:
+    """Clave de grupo del catalogo -> nombre para mostrar (config/entities.yaml)."""
+    import yaml
+    ents = yaml.safe_load(open(ROOT / "config" / "entities.yaml", encoding="utf-8"))
+    return {e["key"]: e["name"] for e in (ents.get("entities") or ents)}
+
+
+def grupo_legible(claves: pd.Series) -> pd.Series:
+    """Grupo economico del catalogo, con su nombre. Es la unica fuente de
+    consolidacion: la identidad legal (RUT o LEI) sigue en su propia columna."""
+    nombres = _nombres_grupo()
+    return claves.map(lambda k: "Sin grupo (no resuelta)"
+                      if k is None or (isinstance(k, float) and np.isnan(k)) or str(k).startswith("UNRESOLVED")
+                      else nombres.get(k, k))
+
+
 def derivados(ctx: Contexto, periodo: int | None = None) -> pd.DataFrame:
     """Operaciones del B.7 del periodo, con familia, subyacente, entidad legal
     y montos en MM USD. Incluye pactos (familia 'Pacto') para su hoja propia."""
@@ -333,13 +362,8 @@ def derivados(ctx: Contexto, periodo: int | None = None) -> pd.DataFrame:
     ).fetch_df()
     df = identificar(df)
     df = df.merge(ctx.aseguradoras, on="rut_compania", how="left")
-    df["familia"] = df["instrumento"].map(_familia)
-    df["subyacente"] = df.apply(_subyacente, axis=1)
-    # Un forward UF contra pesos es un forward de inflacion aunque la
-    # aseguradora lo informe con subyacente "moneda extranjera": va a la hoja
-    # de Forward UF, donde aplica la inflacion implicita. La etiqueta original
-    # queda en `instrumento`.
-    df.loc[(df.familia == "Forward FX") & (df.subyacente == "UF/CLP"), "familia"] = "Forward UF"
+    df = _clasificar(df)
+    df["grupo_contraparte"] = grupo_legible(df["contraparte_grupo"])
     for src, dst in (("nocional_m", "nocional_mmusd"), ("mtm_neto_m", "mtm_mmusd"),
                      ("valor_presente_largo_m", "vp_largo_mmusd"),
                      ("valor_presente_corto_m", "vp_corto_mmusd"),
@@ -347,6 +371,9 @@ def derivados(ctx: Contexto, periodo: int | None = None) -> pd.DataFrame:
         df[dst] = ctx.a_mmusd(pd.to_numeric(df[src], errors="coerce"), periodo)
     df["plazo_residual_dias"] = (pd.to_datetime(df["fecha_vencimiento"])
                                  - pd.Timestamp(ctx.fecha_cierre)).dt.days
+    df["plazo_original_dias"] = (pd.to_datetime(df["fecha_vencimiento"])
+                                 - pd.to_datetime(df["fecha_operacion"])).dt.days
+    df["tasa_metrica"] = metrica_tasa(df)
     return df
 
 
@@ -376,6 +403,7 @@ def deriv_por_contraparte(df: pd.DataFrame) -> pd.DataFrame:
     t = _tabla_nocional(d, ["entidad_id"])
     meta = (d.groupby("entidad_id")
             .agg(entidad_tipo_id=("entidad_tipo_id", "first"), entidad_nombre=("entidad_nombre", "first"),
+                 grupo_contraparte=("grupo_contraparte", "first"),
                  entidad_pais=("entidad_pais", "first"), entidad_fuente_nombre=("entidad_fuente_nombre", "first"),
                  entidad_alerta=("entidad_alerta", "first"), aseguradoras=("rut_compania", "nunique"))
             .reset_index())
@@ -508,6 +536,7 @@ def evolucion_derivados(ctx: Contexto) -> tuple[pd.DataFrame, pd.DataFrame]:
     df = identificar(df)
     df["familia"] = df["instrumento"].map(_familia)
     df = df[df.familia != "Pacto"].merge(ctx.aseguradoras, on="rut_compania", how="left")
+    df["grupo_contraparte"] = grupo_legible(df["contraparte_grupo"])
     tc = df.periodo_informacion.map(lambda p: ctx.fx[p][0])
     df["nocional_mmusd"] = pd.to_numeric(df.nocional_m, errors="coerce") / tc / 1000.0
     df["columna"] = df.periodo_informacion.map(etiqueta_periodo)
@@ -521,7 +550,7 @@ def evolucion_derivados(ctx: Contexto) -> tuple[pd.DataFrame, pd.DataFrame]:
           .reindex(columns=cols))
     # Nombre, tipo y pais del mes mas reciente en que aparece la entidad.
     meta = (df.sort_values("periodo_informacion")
-            .groupby("entidad_id")[["entidad_tipo_id", "entidad_nombre", "entidad_pais"]].last())
+            .groupby("entidad_id")[["entidad_tipo_id", "entidad_nombre", "entidad_pais", "grupo_contraparte"]].last())
     cp = meta.join(cp).reset_index().sort_values(actual, ascending=False, na_position="last")
     return aseg, cp
 
@@ -745,3 +774,231 @@ def detalle_otras(ctx: Contexto, periodo: int | None = None) -> pd.DataFrame:
     """).fetch_df()
     df = _con_aseg(ctx, df, ["valor_costo", "depreciacion", "valor_razonable", "deterioro", "valor_final"], p)
     return df.sort_values(["aseguradora", "valor_final"], ascending=[True, False])
+
+
+# ---------------------------------------------------------------------------
+#  historia de operaciones: originacion mensual y camadas
+# ---------------------------------------------------------------------------
+#
+# La foto de un mes muestra lo que SIGUE VIVO, no lo que se origino: una
+# operacion que vencio antes del cierre ya no esta. Para saber cuanto se
+# origino y cuanto sobrevive hay que seguir cada operacion a traves de las
+# fotos mensuales del warehouse. La clave (aseguradora, folio, item) no se
+# repite dentro de una foto, el 97,9% de las operaciones aparece por primera
+# vez en su propio mes de origen y solo 2 de 9.563 tienen huecos.
+#
+# Reglas:
+#   - una operacion esta VIVA desde su mes de origen hasta la ultima foto en
+#     que aparece (si se informo con atraso, igual existia en el intertanto);
+#   - su nocional INICIAL es el de la primera foto, al dolar de ese cierre, y
+#     la supervivencia se mide sobre ese valor fijo: la curva refleja
+#     vencimientos y deshaces, no movimientos del tipo de cambio;
+#   - solo camadas desde la primera foto del warehouse (dic-2024): para las
+#     anteriores no se observa el volumen inicial;
+#   - lo que se origina y vence dentro del mismo mes no es observable con
+#     fotos de cierre de mes.
+
+#: Metrica de tasa de cada familia: solo donde hay una tasa bien definida y
+#: COMPARABLE entre operaciones del mismo subyacente.
+#:
+#:   CCS          Diferencial entre patas fijas, moneda 1 contra moneda 2 del
+#:                cruce canonico (UF contra USD en un UF/USD), en forma
+#:                compuesta: (1 + tasa 1) / (1 + tasa 2) - 1. En los CCS UF/USD
+#:                conviven dos convenciones de reporte: tasa por pata (UF 3,49%
+#:                contra USD 6,14%) y pata USD plana (USD 0%, UF -2,19%). La
+#:                tasa de la pata UF sola mezcla ambas y cae cuando cambia la
+#:                mezcla sin que el mercado se mueva. El diferencial compuesto
+#:                es exactamente la tasa UF cuando la pata USD es plana, y deja
+#:                ~10 pb entre convenciones a igual plazo (la resta simple
+#:                dejaba ~25).
+#:   Swap Promesa Inflacion breakeven: (1 + tasa pesos) / (1 + tasa UF) - 1,
+#:                solo fija contra fija.
+#:   IRS          Tasa fija.
+#:   Forward FX   Tipo de cambio forward pactado (CLP por unidad de la divisa),
+#:                exacto. El diferencial implicito anualizado necesita el spot
+#:                de la ejecucion; con el dolar observado del dia su ruido
+#:                (p10-p90 de +-2 a +-5% anual bajo 3 meses) es mayor que la
+#:                senal, asi que no se usa.
+#:   Forward UF   Inflacion implicita al pactar: (precio pactado / UF del dia)
+#:                ^ (365 / dias) - 1. Exacta: la UF de cada dia es oficial.
+#:                Bajo 3 meses la domina el IPC ya conocido del mes (abr-2026:
+#:                ~18% anualizado a 40 dias, con la UF efectivamente subiendo
+#:                1,6% en ese plazo); menos de DIAS_MIN_FWD dias queda fuera.
+METRICA_TASA = {"CCS": "Diferencial de tasas moneda 1 vs moneda 2 del cruce (pb)",
+                "Swap Promesa": "Inflacion breakeven (%)",
+                "IRS": "Tasa fija (%)",
+                "Forward FX": "Tipo de cambio forward pactado (CLP por unidad de divisa)",
+                "Forward UF": "Inflacion implicita al pactar (% anual)"}
+
+DIAS_MIN_FWD = 14
+
+
+def _serie_diaria(nombre: str) -> pd.Series:
+    """Serie diaria de config/series (uf o usd), indexada por fecha y ordenada."""
+    import json
+    doc = json.load(open(ROOT / "config" / "series" / f"{nombre}.json", encoding="utf-8"))
+    d = doc["diaria"] if isinstance(doc.get("diaria"), dict) else doc["dias"]
+    return pd.Series({pd.Timestamp(k): float(v) for k, v in d.items()}).sort_index()
+
+
+def _valor_serie(serie: pd.Series, fechas: pd.Series) -> pd.Series:
+    """Valor de la serie en cada fecha: el ultimo publicado con fecha <= fecha."""
+    f = pd.to_datetime(fechas)
+    pos = serie.index.searchsorted(f.fillna(pd.Timestamp("1900-01-01")).values, side="right") - 1
+    vals = serie.values[np.clip(pos, 0, len(serie) - 1)]
+    return pd.Series(np.where((pos >= 0) & f.notna().values, vals, np.nan), index=fechas.index)
+
+
+def metrica_tasa(ops: pd.DataFrame) -> pd.Series:
+    """Metrica de tasa de cada operacion segun su familia (ver METRICA_TASA).
+
+    Necesita familia, subyacente, monedas y tasas de las patas, rol_tasa_fija,
+    tasa_fija, tasa_precio_contrato y las fechas de operacion y vencimiento.
+    """
+    m = pd.Series(np.nan, index=ops.index, dtype="float64")
+    ml, mc = ops.m_larga.map(_mon), ops.m_corta.map(_mon)
+    tl = pd.to_numeric(ops.pata_larga_tasa, errors="coerce")
+    tco = pd.to_numeric(ops.pata_corta_tasa, errors="coerce")
+
+    # CCS: moneda 1 del cruce canonico contra moneda 2, compuesto. Ambas patas
+    # en 0% es un contrato no informado, no un diferencial de 0.
+    primera = pd.Series([_par(a, b).split("/")[0] for a, b in zip(ml, mc)], index=ops.index)
+    ccs = ((ops.familia == "CCS") & (ops.rol_tasa_fija == "FIJA_CONTRA_FIJA") & (ml != mc)
+           & tl.notna() & tco.notna() & ~((tl == 0) & (tco == 0)))
+    t1, t2 = np.where(ml == primera, tl, tco), np.where(ml == primera, tco, tl)
+    m[ccs] = (((1 + t1 / 100) / (1 + t2 / 100) - 1) * 1e4)[ccs.values]
+
+    pr = ops.familia == "Swap Promesa"
+    if pr.any():
+        m[pr] = ops[pr].apply(breakeven_promesa, axis=1)
+
+    irs = ops.familia == "IRS"
+    m[irs] = pd.to_numeric(ops.tasa_fija, errors="coerce")[irs]
+
+    precio = pd.to_numeric(ops.tasa_precio_contrato, errors="coerce")
+    fx = (ops.familia == "Forward FX") & (precio > 0)
+    m[fx] = precio[fx]
+
+    dias = (pd.to_datetime(ops.fecha_vencimiento) - pd.to_datetime(ops.fecha_operacion)).dt.days
+    uf = (ops.familia == "Forward UF") & (ops.subyacente == "UF/CLP") & (dias >= DIAS_MIN_FWD) & (precio > 0)
+    if uf.any():
+        spot = _valor_serie(_serie_diaria("uf"), ops.fecha_operacion[uf])
+        m[uf] = ((precio[uf] / spot) ** (365.0 / dias[uf]) - 1) * 100
+    return m
+
+
+def historia_operaciones(ctx: Contexto) -> tuple[pd.DataFrame, list[int]]:
+    """Una fila por OPERACION (sin pactos), con su primera y ultima foto.
+
+    Lo pactado (nocional, monedas y tasas de las patas, precio) sale de la
+    PRIMERA foto en que aparece la operacion. La clasificacion, la contraparte
+    y las fechas salen de la ULTIMA, igual que en el stock del periodo: si la
+    aseguradora corrigio lo que informa, vale lo corregido (18 operaciones
+    pasaron de CCS a swap promesa entre fotos).
+    """
+    pers = periodos_disponibles(ctx)
+    h = ctx.con.execute(f"""
+        SELECT periodo_informacion, rut_compania, folio_operacion, item_operacion, instrumento,
+               activo_objeto_largo, activo_objeto_corto, moneda, indice_flotante, subyacente_contrato,
+               fecha_operacion, fecha_vencimiento, nocional_m, m_larga, m_corta, pata_larga_tasa,
+               pata_corta_tasa, rol_tasa_fija, tasa_fija, tasa_precio_contrato,
+               contraparte_rut, contraparte_dv, contraparte_lei, contraparte_nombre_informado,
+               contraparte_key, contraparte_nombre, contraparte_grupo, resolucion_metodo
+        FROM v_derivado_clasificado
+        WHERE periodo_informacion <= {ctx.periodo} AND instrumento <> 'Pacto'
+    """).fetch_df()
+    clave = ["rut_compania", "folio_operacion", "item_operacion"]
+    pactado = ["nocional_m", "m_larga", "m_corta", "rol_tasa_fija", "pata_larga_tasa",
+               "pata_corta_tasa", "tasa_fija", "tasa_precio_contrato"]
+    # drop_duplicates sobre filas ordenadas toma filas COMPLETAS; groupby().first()
+    # mezclaria filas al saltarse nulos.
+    h = h.sort_values("periodo_informacion", kind="stable")
+    primera = (h.drop_duplicates(clave, keep="first")[clave + ["periodo_informacion"] + pactado]
+               .rename(columns={"periodo_informacion": "primera_foto"}))
+    ultima = (h.drop_duplicates(clave, keep="last").drop(columns=pactado)
+              .rename(columns={"periodo_informacion": "ultima_foto"}))
+    ops = ultima.merge(primera, on=clave, validate="one_to_one")
+    ops = identificar(ops)
+    ops = _clasificar(ops)
+    ops["grupo_contraparte"] = grupo_legible(ops["contraparte_grupo"])
+    tc = ops.primera_foto.map(lambda p: ctx.fx[p][0])
+    ops["nocional_inicial_mmusd"] = pd.to_numeric(ops.nocional_m, errors="coerce") / tc / 1000.0
+    fo = pd.to_datetime(ops.fecha_operacion)
+    ops["mes_origen"] = (fo.dt.year * 100 + fo.dt.month).astype("Int64")
+    ops["tasa_metrica"] = metrica_tasa(ops)
+    return ops, pers
+
+
+def _en_ventana(ops: pd.DataFrame, pers: list[int]) -> pd.DataFrame:
+    return ops[ops.mes_origen.notna() & (ops.mes_origen >= pers[0]) & (ops.mes_origen <= pers[-1])]
+
+
+def originacion_mensual(ops: pd.DataFrame, pers: list[int]) -> pd.DataFrame:
+    """Nocional ORIGINADO por mes, instrumento y contraparte legal (con su grupo)."""
+    o = _en_ventana(ops, pers)
+    t = (o.groupby(["mes_origen", "familia", "subyacente", "grupo_contraparte", "entidad_id", "entidad_nombre"],
+                   dropna=False)
+          .agg(operaciones=("folio_operacion", "size"), nocional_inicial_mmusd=("nocional_inicial_mmusd", "sum"))
+          .reset_index())
+    t["mes_etiqueta"] = t.mes_origen.map(lambda p: etiqueta_periodo(int(p)))
+    return t.sort_values(["mes_origen", "familia", "nocional_inicial_mmusd"], ascending=[True, True, False])
+
+
+def camadas(ops: pd.DataFrame, pers: list[int]) -> pd.DataFrame:
+    """Supervivencia de cada camada (instrumento, subyacente y mes de origen)
+    en cada foto mensual desde su origen, medida sobre el nocional inicial.
+    Una camada ya extinguida aparece con 0, no desaparece."""
+    o = _en_ventana(ops, pers)
+    k = ["familia", "subyacente", "mes_origen"]
+    inicial = o.groupby(k).nocional_inicial_mmusd.sum()
+    filas = []
+    for foto in pers:
+        base = inicial[inicial.index.get_level_values("mes_origen") <= foto]
+        viva = o[(o.mes_origen <= foto) & (o.ultima_foto >= foto)]
+        g = (viva.groupby(k).agg(operaciones_vivas=("folio_operacion", "size"),
+                                 nocional_vivo_mmusd=("nocional_inicial_mmusd", "sum"))
+             .reindex(base.index, fill_value=0))
+        g["nocional_inicial_camada_mmusd"] = base
+        g["foto"] = foto
+        filas.append(g.reset_index())
+    t = pd.concat(filas, ignore_index=True)
+    t["operaciones_vivas"] = t.operaciones_vivas.astype(int)
+    t["nocional_vivo_mmusd"] = t.nocional_vivo_mmusd.astype(float)
+    t["pct_vivo"] = np.where(t.nocional_inicial_camada_mmusd > 0,
+                             t.nocional_vivo_mmusd / t.nocional_inicial_camada_mmusd * 100, np.nan)
+    t["meses_desde_origen"] = ((t.foto // 100 - t.mes_origen // 100) * 12 + (t.foto % 100 - t.mes_origen % 100)).astype(int)
+    t["mes_etiqueta"] = t.mes_origen.map(lambda p: etiqueta_periodo(int(p)))
+    t["foto_etiqueta"] = t.foto.map(etiqueta_periodo)
+    orden = {f: i for i, f in enumerate(FAMILIAS)}
+    return (t.assign(_o=t.familia.map(orden)).sort_values(["_o", "subyacente", "mes_origen", "foto"])
+             .drop(columns="_o"))
+
+
+def camadas_resumen(ops: pd.DataFrame, pers: list[int]) -> pd.DataFrame:
+    """Una fila por camada: cuanto se origino, a que tasa y cuanto sigue vivo hoy."""
+    o = _en_ventana(ops, pers).copy()
+    o["viva_hoy"] = o.ultima_foto == pers[-1]
+    o["_w"] = np.where(o.tasa_metrica.notna(), o.nocional_inicial_mmusd, 0.0)
+    o["_tw"] = o.tasa_metrica.fillna(0.0) * o._w
+    o["_wv"] = np.where(o.viva_hoy, o._w, 0.0)
+    o["_twv"] = np.where(o.viva_hoy, o._tw, 0.0)
+    k = ["familia", "subyacente", "mes_origen"]
+    g = o.groupby(k)
+    t = pd.DataFrame({
+        "operaciones_iniciales": g.size(),
+        "nocional_inicial_mmusd": g.nocional_inicial_mmusd.sum(),
+        "operaciones_vivas_hoy": g.viva_hoy.sum(),
+        "nocional_vivo_hoy_mmusd": o[o.viva_hoy].groupby(k).nocional_inicial_mmusd.sum(),
+        "operaciones_con_tasa": g.tasa_metrica.count(),
+        "_tw": g._tw.sum(), "_w": g._w.sum(), "_twv": g._twv.sum(), "_wv": g._wv.sum(),
+    }).reset_index()
+    t["nocional_vivo_hoy_mmusd"] = t.nocional_vivo_hoy_mmusd.fillna(0.0)
+    t["pct_vivo_hoy"] = np.where(t.nocional_inicial_mmusd > 0,
+                                 t.nocional_vivo_hoy_mmusd / t.nocional_inicial_mmusd * 100, np.nan)
+    t["metrica_tasa"] = np.where(t._w > 0, t.familia.map(METRICA_TASA), "Sin metrica comparable")
+    t["tasa_inicial_ponderada"] = np.where(t._w > 0, t._tw / t._w, np.nan)
+    t["tasa_viva_hoy_ponderada"] = np.where(t._wv > 0, t._twv / t._wv, np.nan)
+    t["mes_etiqueta"] = t.mes_origen.map(lambda p: etiqueta_periodo(int(p)))
+    orden = {f: i for i, f in enumerate(FAMILIAS)}
+    return (t.drop(columns=["_tw", "_w", "_twv", "_wv"]).assign(_o=t.familia.map(orden))
+             .sort_values(["_o", "subyacente", "mes_origen"]).drop(columns="_o"))

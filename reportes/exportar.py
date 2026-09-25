@@ -12,11 +12,10 @@ from __future__ import annotations
 import datetime as _dt
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 
 from reportes import datos as D
-from reportes.excel import FILA_HEADER, Col, Hoja, Libro
+from reportes.excel import Col, Hoja, Libro
 
 ROOT = Path(__file__).resolve().parents[1]
 SALIDA = ROOT / "reportes" / "salida"
@@ -50,12 +49,17 @@ C_CP = [Col("Contraparte (nombre legal)", "entidad_nombre", "texto",
 ALERTA_OP = Col("Alerta contraparte", "entidad_alerta_op", "texto",
                 "Hechos sobre el identificador que afectan a la operacion: LEI invalido, no vigente, de otra "
                 "entidad o de un fondo, o sin identificador. Detalle completo en Calidad_Contrapartes")
-C_CP_OP = C_CP[:3]
+GRUPO = Col("Grupo contraparte", "grupo_contraparte", "texto",
+            "Grupo economico de la contraparte segun el catalogo del dashboard (config/entities.yaml). Sirve para "
+            "consolidar (p.ej. Grupo BBVA); la identidad legal sigue en 'ID legal contraparte'")
+C_CP_OP = C_CP[:3] + [GRUPO]
 
 C_OP = [Col("Folio", "folio_operacion", "texto", "Folio de la operacion en el anexo B.7"),
         Col("Item", "item_operacion", "texto", "Item dentro del folio"),
         Col("Fecha operacion", "fecha_operacion", "fecha", "Fecha en que se pacto la operacion"),
         Col("Fecha vencimiento", "fecha_vencimiento", "fecha", "Fecha de vencimiento del contrato"),
+        Col("Plazo original (dias)", "plazo_original_dias", "entero",
+            "Dias entre la fecha de operacion y el vencimiento: el plazo al pactar"),
         Col("Plazo residual (dias)", "plazo_residual_dias", "entero",
             "Dias desde la fecha de corte hasta el vencimiento")]
 
@@ -91,6 +95,10 @@ def hojas_instrumentos(ops: pd.DataFrame) -> list[Hoja]:
             Col("Tasa pata larga (%)", "pata_larga_tasa", "tasa", "Tasa de la pata activa, en % anual segun contrato"),
             Col("Tasa pata corta (%)", "pata_corta_tasa", "tasa", "Tasa de la pata pasiva, en % anual segun contrato"),
             Col("Spread entre patas (pb)", "spread_patas_pb", "pb", "Diferencia entre las tasas de ambas patas"),
+            Col("Diferencial compuesto moneda 1 vs 2 (pb)", "tasa_metrica", "pb",
+                "(1 + tasa moneda 1) / (1 + tasa moneda 2) - 1 del cruce canonico (UF contra USD en un UF/USD), en pb. "
+                "Solo patas fijas. Igual a la tasa UF cuando la pata USD es plana en 0%: comparable entre las dos "
+                "convenciones de reporte, a diferencia de la tasa de una pata sola"),
             Col("Estructura", "direccion", "texto", "Fija contra fija, paga o recibe fija, flotante"),
             Col("Indice flotante", "indice_flotante", "texto", "Indice de la pata flotante, si la hay"),
             Col("TC contrato", "tipo_cambio_contrato", "num2", "Tipo de cambio pactado"),
@@ -148,6 +156,7 @@ def hojas_instrumentos(ops: pd.DataFrame) -> list[Hoja]:
         "Forward_UF", "tbl_forward_uf", "Forwards de UF (inflacion)",
         "Forwards de UF contra pesos: cobertura de inflacion. Incluye los informados como moneda extranjera con subyacente UF.",
         C_ASEG + C_CP_OP + [
+            Col("Par", "subyacente", "texto", "UF contra pesos (UF/CLP), en orden canonico"),
             Col("Instrumento informado", "instrumento", "texto",
                 "Como lo clasifico el warehouse: 'Forward UF' o 'Forward FX UF' (misma economia)"),
             Col("Operacion", "operacion", "texto", "Compra o venta de UF, leida de los activos objeto"),
@@ -158,6 +167,9 @@ def hojas_instrumentos(ops: pd.DataFrame) -> list[Hoja]:
             Col("Precio forward de mercado (CLP por UF)", "tasa_precio_mercado", "num2", "UF forward de mercado al cierre"),
             Col("Inflacion implicita de mercado (% anual)", "infl_impl", "pct",
                 "(UF forward de mercado / UF de cierre) ^ (365 / dias al vencimiento) - 1"),
+            Col("Inflacion implicita al pactar (% anual)", "tasa_metrica", "pct",
+                "(precio pactado / UF del dia de la operacion) ^ (365 / plazo original) - 1. Exacta: la UF de cada "
+                "dia es oficial. Bajo 3 meses la domina el IPC ya conocido del mes. Vacia bajo 14 dias"),
             Col("Pactado vs mercado (%)", "vs_mercado", "pct", "Precio pactado / precio de mercado - 1"),
             NOC, MTM] + C_OP + [ALERTA_OP],
         uf, total_etiqueta="Total forwards UF (fuera de la tabla)"))
@@ -168,6 +180,7 @@ def hojas_instrumentos(ops: pd.DataFrame) -> list[Hoja]:
         "IRS", "tbl_irs", "Interest Rate Swaps",
         "Swaps de tasa: una pata fija y una flotante en la misma moneda (Camara, SOFR).",
         C_ASEG + C_CP_OP + [
+            Col("Subyacente", "subyacente", "texto", "Tasa, moneda e indice de la pata flotante"),
             Col("Indice flotante", "indice_flotante", "texto", "Indice de la pata flotante"),
             Col("Direccion", "direccion", "texto", "Paga fija o recibe fija, desde la aseguradora"),
             Col("Moneda", "moneda_n", "texto", "Moneda del swap"),
@@ -185,6 +198,7 @@ def hojas_instrumentos(ops: pd.DataFrame) -> list[Hoja]:
         "Opciones", "tbl_opciones", "Opciones",
         "Opciones sobre acciones o indices. El tipo se muestra con el codigo CMF tal como se informa.",
         C_ASEG + C_CP_OP + [
+            Col("Subyacente", "subyacente", "texto", "Clase de subyacente (equity)"),
             Col("Codigo CMF", "tipo_operacion", "texto", "Codigo de operacion tal como se informa"),
             Col("Activo objeto largo", "activo_objeto_largo", "texto", "Activo de la posicion larga"),
             Col("Activo objeto corto", "activo_objeto_corto", "texto", "Activo de la posicion corta"),
@@ -199,6 +213,7 @@ def hojas_instrumentos(ops: pd.DataFrame) -> list[Hoja]:
         "Futuros", "tbl_futuros", "Futuros",
         "Futuros. El subyacente es el codigo que informa la aseguradora.",
         C_ASEG + C_CP_OP + [
+            Col("Subyacente", "subyacente", "texto", "Clase de subyacente: futuro de tasa o futuro"),
             Col("Codigo CMF", "tipo_operacion", "texto", "Codigo de operacion tal como se informa"),
             Col("Subyacente (codigo)", "activo_objeto_largo", "texto", "Codigo del subyacente informado"),
             Col("Precio pactado", "tasa_precio_contrato", "num2", "Precio del contrato"),
@@ -414,6 +429,75 @@ def hojas_inversiones(ctx) -> list[Hoja]:
 #  libro completo
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+#  originacion y camadas: cada operacion seguida por las fotos mensuales
+# ---------------------------------------------------------------------------
+
+MES_ORIGEN = [Col("Mes origen", "mes_origen", "id", "Mes de la fecha de operacion, AAAAMM"),
+              Col("Mes", "mes_etiqueta", "texto", "Mes de origen, legible")]
+INSTR = [Col("Instrumento", "familia", "texto", "Tipo de derivado (sin pactos)"),
+         Col("Subyacente", "subyacente", "texto", "Par de monedas (orden canonico), tasa e indice, o equity")]
+ORIGINADO = Col("Nocional originado (MM USD)", "nocional_inicial_mmusd", "mm",
+                "Nocional de la primera foto en que aparece cada operacion, al dolar observado de ese cierre",
+                total=True)
+
+
+def hojas_originacion(ctx) -> list[tuple[Hoja, str]]:
+    """(hoja, unidades) de Originacion, Camadas_Resumen y Camadas."""
+    ops, pers = D.historia_operaciones(ctx)
+    v = D._en_ventana(ops, pers)
+    propio = (v.primera_foto == v.mes_origen).mean() * 100
+    desde, hasta = D.etiqueta_periodo(pers[0]), D.etiqueta_periodo(pers[-1])
+    u = (f"Montos en MM USD, al dolar observado del cierre en que cada operacion aparece por primera vez (su propio "
+         f"mes de origen en el {propio:.1f}% de los casos). Fuente: CMF, Circular 1835, anexo B.7, fotos {desde} "
+         f"a {hasta}.")
+    out = [(Hoja(
+        "Originacion", "tbl_originacion", "Originacion mensual de derivados por contraparte legal",
+        f"Operaciones del B.7 (vigentes al cierre en que se informan) con fecha de operacion en cada mes, {desde} a "
+        f"{hasta}. Sin pactos. Una fila por mes, instrumento, subyacente y entidad legal.",
+        MES_ORIGEN + INSTR + [GRUPO, C_CP[0], C_CP[1],
+                              Col("Operaciones", "operaciones", "entero", "Operaciones originadas", total=True),
+                              ORIGINADO],
+        D.originacion_mensual(ops, pers), total_etiqueta=f"Total originado {desde} a {hasta} (fuera de la tabla)"), u),
+        (Hoja(
+            "Camadas_Resumen", "tbl_camadas_resumen", "Camadas: originado, tasa al pactar y vivo hoy",
+            f"Una fila por instrumento, subyacente y mes de origen. Vivo hoy = sigue informado en {hasta}. La tasa "
+            "se pondera por nocional originado, solo sobre operaciones con la metrica calculable.",
+            INSTR + MES_ORIGEN + [
+                Col("Operaciones originadas", "operaciones_iniciales", "entero", "Operaciones de la camada", total=True),
+                ORIGINADO,
+                Col("Metrica de tasa", "metrica_tasa", "texto", "Que mide la tasa de esta fila, con su unidad"),
+                Col("Operaciones con tasa", "operaciones_con_tasa", "entero",
+                    "Operaciones con la metrica calculable", total=True),
+                Col("Tasa ponderada al pactar", "tasa_inicial_ponderada", "num2",
+                    "Metrica de tasa de la camada ponderada por nocional originado. Unidad: ver 'Metrica de tasa'"),
+                Col("Operaciones vivas hoy", "operaciones_vivas_hoy", "entero",
+                    f"Operaciones de la camada informadas en {hasta}", total=True),
+                Col("Nocional vivo hoy (MM USD)", "nocional_vivo_hoy_mmusd", "mm",
+                    "Nocional originado de las operaciones que siguen vivas, al mismo dolar que el originado",
+                    total=True),
+                Col("Vivo hoy (%)", "pct_vivo_hoy", "pct", "Nocional vivo hoy / nocional originado"),
+                Col("Tasa ponderada de lo vivo", "tasa_viva_hoy_ponderada", "num2",
+                    "Misma metrica, solo sobre las operaciones que siguen vivas")],
+            D.camadas_resumen(ops, pers), congelar_cols=4, total_etiqueta="Total (fuera de la tabla)"), u),
+        (Hoja(
+            "Camadas", "tbl_camadas", "Camadas: supervivencia mes a mes",
+            "Una fila por instrumento, subyacente, mes de origen y foto mensual desde el origen. Vivo y originado al "
+            "mismo dolar: la curva refleja vencimientos y deshaces, no tipo de cambio. Una camada extinguida queda en 0.",
+            INSTR + MES_ORIGEN + [
+                Col("Foto", "foto", "id", "Cierre mensual observado, AAAAMM"),
+                Col("Mes foto", "foto_etiqueta", "texto", "Cierre mensual observado, legible"),
+                Col("Meses desde origen", "meses_desde_origen", "entero", "Meses entre el mes de origen y la foto"),
+                Col("Operaciones vivas", "operaciones_vivas", "entero", "Operaciones de la camada informadas en la foto"),
+                Col("Nocional vivo (MM USD)", "nocional_vivo_mmusd", "mm",
+                    "Nocional originado de las operaciones vivas en la foto"),
+                Col("Nocional originado (MM USD)", "nocional_inicial_camada_mmusd", "mm",
+                    "Nocional originado de toda la camada"),
+                Col("Vivo (%)", "pct_vivo", "pct", "Nocional vivo / nocional originado")],
+            D.camadas(ops, pers), congelar_cols=4), u)]
+    return out
+
+
 def generar(periodo: int | None = None, salida: Path | None = None) -> Path:
     ctx = D.contexto(periodo)
     actual = D.etiqueta_periodo(ctx.periodo)
@@ -491,6 +575,11 @@ def generar(periodo: int | None = None, salida: Path | None = None) -> Path:
            ("Deriv_Subyacente", "tbl_deriv_subyacente", "Nocional por activo subyacente"),
            ("Evol_Deriv_Aseguradora", "tbl_evol_deriv_aseguradora", "Nocional de derivados mensual por aseguradora"),
            ("Evol_Deriv_Contraparte", "tbl_evol_deriv_contraparte", "Nocional de derivados mensual por contraparte legal"),
+           ("Originacion", "tbl_originacion", "Nocional ORIGINADO por mes, instrumento, subyacente y contraparte legal "
+                                              "(con su grupo), desde Dic-2024"),
+           ("Camadas_Resumen", "tbl_camadas_resumen", "Por camada (mes de origen): cuanto se origino, a que tasa y "
+                                                      "cuanto sigue vivo hoy"),
+           ("Camadas", "tbl_camadas", "Supervivencia de cada camada mes a mes (nocional vivo sobre el originado)"),
            ("CCS", "tbl_ccs", "Detalle tailor-made: cross currency swaps"),
            ("Swap_Promesa", "tbl_swap_promesa", "Detalle tailor-made: swaps UF contra pesos"),
            ("Forward_FX", "tbl_forward_fx", "Detalle tailor-made: forwards de moneda"),
@@ -529,6 +618,18 @@ def generar(periodo: int | None = None, salida: Path | None = None) -> Path:
         "Contrapartes por identificador legal (RUT o LEI): no se agrupan filiales bajo su matriz. Los nombres de "
         "LEI vienen de GLEIF. Ver Calidad_Contrapartes para LEI invalidos o de otra entidad.",
         "Publicacion vigente: si un periodo tiene dos publicaciones se usa la mas reciente en todas las tablas.",
+        "Originacion y camadas: cada operacion (aseguradora, folio, item) se sigue por las fotos mensuales desde "
+        "Dic-2024. Mes de origen = mes de la fecha de operacion. Nocional originado = el de la primera foto en que "
+        "aparece, al dolar de ese cierre, y queda fijo: la supervivencia refleja vencimientos y deshaces, no tipo de "
+        "cambio ni amortizaciones parciales. Viva = sigue informada en la foto. No se observa lo que se origina y "
+        "vence dentro del mismo mes, y las camadas anteriores a Dic-2024 quedan fuera (no se ve su volumen inicial). "
+        "Clasificacion y contraparte: las de la ultima foto, igual que el stock; lo pactado: de la primera.",
+        "Tasa al pactar (Camadas_Resumen y hojas CCS, Swap_Promesa, IRS, Forward_FX, Forward_UF): CCS, diferencial "
+        "compuesto entre patas fijas, (1 + tasa moneda 1) / (1 + tasa moneda 2) - 1 en pb (UF contra USD en un "
+        "UF/USD): es la metrica que no cambia con la convencion de reporte (tasa por pata o pata USD plana en 0%). "
+        "Swap promesa: inflacion breakeven. IRS: tasa fija. Forward de moneda: tipo de cambio pactado. Forward UF: "
+        "inflacion implicita contra la UF del dia de la operacion. Promedios ponderados por nocional originado, "
+        "solo dentro de un mismo instrumento y subyacente.",
         "En ene-2026 Seguros Vida Security Prevision deja de informar y BICE Vida sube en un monto "
         "equivalente (dic-2025: BICE 8.106 + Vida Security 4.344 = 12.450 MM USD; ene-2026: BICE 13.213, "
         "+6,1%, igual a la apreciacion del peso ese mes). La variacion de BICE contra Dic-2025 refleja la "
@@ -560,7 +661,7 @@ def generar(periodo: int | None = None, salida: Path | None = None) -> Path:
                                              "stock; el nocional va aparte"),
         ("Sin clasificar", "Codigos de instrumento que no calzan con ninguna clase; deberia ser 0"),
         ("Total", "Suma de las clases (sin contar 'de la cual leasing' dos veces). No incluye el nocional")]]
-    noc_actual = Col(f"Derivados: nocional, fuera del total (MM USD)", f"noc_{actual}", "mm",
+    noc_actual = Col("Derivados: nocional, fuera del total (MM USD)", f"noc_{actual}", "mm",
                      "Nocional de derivados, sin pactos. Informativo: NO suma al Total, porque el nocional es el "
                      "tamano de referencia del contrato y no lo que vale", total=True)
     L.hoja(Hoja("Stock_Clase", "tbl_stock_clase", f"Stock por clase de activo - {actual}",
@@ -642,7 +743,7 @@ def generar(periodo: int | None = None, salida: Path | None = None) -> Path:
     L.hoja(Hoja("Deriv_Contraparte", "tbl_deriv_contraparte", "Derivados por contraparte (entidad legal)",
                 "Cada RUT o LEI es una entidad: filiales y matrices por separado.",
                 [C_CP[1], Col("Tipo ID", "entidad_tipo_id", "texto", "RUT, LEI, invalido o sin identificador"),
-                 C_CP[0], C_CP[2],
+                 C_CP[0], C_CP[2], GRUPO,
                  Col("Aseguradoras", "aseguradoras", "entero", "Aseguradoras con operaciones vigentes con la entidad")]
                 + cols_noc(dc) + [C_CP[3]],
                 dc, total_etiqueta="Total (fuera de la tabla)"))
@@ -673,8 +774,12 @@ def generar(periodo: int | None = None, salida: Path | None = None) -> Path:
                 "Evolucion mensual del nocional de derivados por contraparte legal",
                 f"Cada RUT o LEI es una entidad: filiales y matrices por separado. Sin pactos. {nota_tc}",
                 [C_CP[1], Col("Tipo ID", "entidad_tipo_id", "texto", "RUT, LEI, invalido o sin identificador"),
-                 C_CP[0], C_CP[2]] + cols_meses("Nocional de derivados con la entidad (sin pactos)"),
+                 C_CP[0], C_CP[2], GRUPO] + cols_meses("Nocional de derivados con la entidad (sin pactos)"),
                 ev_dc, total_etiqueta="Total (fuera de la tabla)"))
+
+    # --- originacion y camadas ----------------------------------------------------------------------
+    for h, u in hojas_originacion(ctx):
+        L.hoja(h, unidades=u)
 
     # --- hojas tailor-made de derivados --------------------------------------------------------------
     for h in hojas_instrumentos(ops):
