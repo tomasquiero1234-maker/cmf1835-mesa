@@ -575,6 +575,8 @@ def generar(periodo: int | None = None, salida: Path | None = None) -> Path:
            ("Deriv_Subyacente", "tbl_deriv_subyacente", "Nocional por activo subyacente"),
            ("Evol_Deriv_Aseguradora", "tbl_evol_deriv_aseguradora", "Nocional de derivados mensual por aseguradora"),
            ("Evol_Deriv_Contraparte", "tbl_evol_deriv_contraparte", "Nocional de derivados mensual por contraparte legal"),
+           ("Evol_Deriv_Grupo", "tbl_evol_deriv_grupo", "Stock mensual de derivados por instrumento y entidad "
+                                                        "legal con su grupo (formato largo)"),
            ("Originacion", "tbl_originacion", "Nocional ORIGINADO por mes, instrumento, subyacente y contraparte legal "
                                               "(con su grupo), desde Dic-2024"),
            ("Camadas_Resumen", "tbl_camadas_resumen", "Por camada (mes de origen): cuanto se origino, a que tasa y "
@@ -776,6 +778,19 @@ def generar(periodo: int | None = None, salida: Path | None = None) -> Path:
                 [C_CP[1], Col("Tipo ID", "entidad_tipo_id", "texto", "RUT, LEI, invalido o sin identificador"),
                  C_CP[0], C_CP[2], GRUPO] + cols_meses("Nocional de derivados con la entidad (sin pactos)"),
                 ev_dc, total_etiqueta="Total (fuera de la tabla)"))
+
+    ev_g = D.evolucion_deriv_grupo(ctx)
+    L.hoja(Hoja("Evol_Deriv_Grupo", "tbl_evol_deriv_grupo",
+                "Stock mensual de derivados por instrumento y contraparte legal, con su grupo",
+                f"Formato largo: una fila por mes, instrumento y entidad legal. Sin pactos. Sirve para ver la "
+                f"participacion de cada grupo en el stock mes a mes. {nota_tc}",
+                [Col("Periodo", "periodo_informacion", "id", "Cierre mensual, AAAAMM"),
+                 Col("Mes", "mes_etiqueta", "texto", "Cierre mensual, legible"),
+                 Col("Instrumento", "familia", "texto", "Tipo de derivado, igual que en las hojas de detalle"),
+                 GRUPO, C_CP[0], C_CP[1],
+                 Col("Operaciones", "operaciones", "entero", "Operaciones vigentes al cierre"),
+                 Col("Nocional (MM USD)", "nocional_mmusd", "mm", "Nocional vigente al cierre, al dolar de ese cierre")],
+                ev_g, congelar_cols=3))
 
     # --- originacion y camadas ----------------------------------------------------------------------
     for h, u in hojas_originacion(ctx):

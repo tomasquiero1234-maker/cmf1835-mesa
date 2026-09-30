@@ -6,8 +6,8 @@ un camino INDEPENDIENTE (pandas por hoja, no el lector por nombre del informe):
   1. el informe lee SOLO el Excel: corre en un proceso donde importar duckdb,
      reportes.datos o reportes.exportar falla;
   2. salidas: HTML con sus 5 secciones y sus graficos, PDF A4 apaisado;
-  3. originacion del mes: detalle vigente = tbl_originacion = lo que muestra;
-  4. league table y participaciones: suman el total y el 100%;
+  3. stock al corte: detalle = Evol_Deriv_Grupo = informe, grupo por grupo;
+  4. todo ranking es top 5 + Grupo BBVA con su puesto real, y suma el total;
   5. tramos de plazo: cada operacion del mes cae en exactamente un tramo;
   6. camadas: originado = originacion mensual, vivo <= originado, nunca sube
      entre fotos, y lo vivo en la ultima foto = lo vivo hoy del resumen;
@@ -106,30 +106,45 @@ def main(argv: list[str] | None = None) -> int:
     res = hoja(xlsx, "Camadas_Resumen")
     cam = hoja(xlsx, "Camadas")
 
-    print("\n[3] originacion del mes")
+    print("\n[3] stock al corte (lo principal)")
+    evg = hoja(xlsx, "Evol_Deriv_Grupo")
+    stock_det = det.groupby("grupo").noc.sum()
+    stock_ev = evg[evg.Periodo == p].groupby("Grupo contraparte")["Nocional (MM USD)"].sum()
+    r_res = I.seccion_resumen(d)
+    check(abs(stock_det.sum() - stock_ev.sum()) < 1e-6 and abs(r_res["_stock"] - stock_det.sum()) < 1e-6
+          and (stock_det - stock_ev.reindex(stock_det.index)).abs().max() < 1e-6,
+          f"stock {stock_det.sum():,.4f} MM USD: hojas de detalle = Evol_Deriv_Grupo = informe, grupo por grupo")
+    ev_ag = hoja(xlsx, "Evol_Deriv_Aseguradora")
+    meses_ev = evg.groupby("Mes")["Nocional (MM USD)"].sum()
+    check(all(abs(meses_ev[m] - pd.to_numeric(ev_ag[f"{m} (MM USD)"]).sum()) < 1e-6 for m in meses_ev.index),
+          f"Evol_Deriv_Grupo = Evol_Deriv_Aseguradora en los {len(meses_ev)} cierres")
+
+    print("\n[4] rankings: top 5 + Grupo BBVA con su puesto real")
+    rk = r_res["_ranking"]
+    orden = stock_det.sort_values(ascending=False)
+    puesto = list(orden.index).index(I.GRUPO_BBVA) + 1
+    check(list(rk.grupo[:5]) == list(orden.index[:5]), f"top 5 del stock: {', '.join(orden.index[:5])}")
+    fila_b = rk[rk.grupo == I.GRUPO_BBVA]
+    check(len(fila_b) == 1 and int(fila_b["rank"].iloc[0]) == puesto
+          and abs(fila_b.share.iloc[0] - orden[I.GRUPO_BBVA] / orden.sum() * 100) < 1e-9,
+          f"Grupo BBVA en el ranking del stock: puesto {puesto} de {len(orden)}, {orden[I.GRUPO_BBVA] / orden.sum() * 100:.2f}%")
+    cuerpo = rk[rk._fila != "total"]
+    check(abs(cuerpo.Total.sum() - stock_det.sum()) < 1e-6 and abs(cuerpo.share.sum() - 100) < 1e-9,
+          "top 5 + BBVA + resto = total del stock y 100%")
+    sh = I.seccion_mercado(d)["_share"]
+    check(I.GRUPO_BBVA in set(sh.grupo) and list(sh.grupo[:5]) == list(orden.index[:5]),
+          "grafico de participacion: top 5 + Grupo BBVA")
+    fl = I.seccion_flujo(d)
     ind = det[det.mes == p].noc.sum()
     tb = pd.to_numeric(orig[orig["Mes origen"] == p]["Nocional originado (MM USD)"]).sum()
-    r_res = I.seccion_resumen(d)
-    check(abs(ind - tb) < 1e-6 and abs(r_res["_tot"] - ind) < 1e-6,
-          f"{I.mes_corto(p)}: detalle {ind:,.4f} = tbl_originacion {tb:,.4f} = informe {r_res['_tot']:,.4f} MM USD")
-    por_fam = det[det.mes == p].groupby("familia").noc.sum()
-    por_fam_o = orig[orig["Mes origen"] == p].groupby("Instrumento")["Nocional originado (MM USD)"].sum()
-    check((por_fam - por_fam_o.reindex(por_fam.index)).abs().max() < 1e-6, "y lo mismo instrumento por instrumento")
-
-    print("\n[4] league table y participaciones")
-    mes = d.vig[d.vig.mes_origen == p]
-    lt, fams = I._league(mes)
-    filas = lt[lt._fila != "total"]
-    tot_row = lt[lt._fila == "total"].iloc[0]
-    check(abs(filas.Total.sum() - ind) < 1e-6 and abs(tot_row.Total - ind) < 1e-6 and abs(filas.share.sum() - 100) < 1e-9,
-          f"top + BBVA + resto = total industria ({ind:,.1f}) y 100% de participacion")
-    check(abs(tot_row[fams].sum() - ind) < 1e-6, "la apertura por instrumento suma el total")
-    sh = I.seccion_mercado(d)["_share"]
-    g_ind = det[det.mes == p].groupby("grupo").noc.sum() / ind * 100
-    check((sh.set_index("grupo").s_mes - g_ind.reindex(sh.grupo).fillna(0.0).values).abs().max() < 1e-9,
-          "participacion del mes de cada grupo = recalculada desde las hojas de detalle")
-    bbva = det[(det.mes == p) & (det.grupo == I.GRUPO_BBVA)].noc.sum() / ind * 100
-    check(abs(sh.set_index("grupo").s_mes[I.GRUPO_BBVA] - bbva) < 1e-9, f"Grupo BBVA en el mes: {bbva:.2f}%")
+    check(all(I.GRUPO_BBVA in set(t_.grupo) for t_ in (fl["_r_mes"], fl["_r_12"]))
+          and abs(fl["_tot"] - ind) < 1e-6 and abs(ind - tb) < 1e-6,
+          f"flujo de {I.mes_corto(p)}: detalle {ind:,.4f} = tbl_originacion {tb:,.4f}; rankings del mes y 12M con BBVA")
+    b12 = fl["_r_12"][fl["_r_12"].grupo == I.GRUPO_BBVA]
+    o12 = orig[orig["Mes origen"].isin([I.mes_atras(p, k) for k in range(12)])].groupby("Grupo contraparte")[
+        "Nocional originado (MM USD)"].sum().sort_values(ascending=False)
+    check(int(b12["rank"].iloc[0]) == list(o12.index).index(I.GRUPO_BBVA) + 1,
+          f"Grupo BBVA en la originacion de 12 meses: puesto {int(b12['rank'].iloc[0])} de {len(o12)}")
 
     print("\n[5] tramos de plazo")
     tr = I.seccion_plazos(d)["_tramos"]

@@ -142,10 +142,9 @@ python -m reportes.informe --sin-pdf    # solo HTML
 python -m tests.informe                 # controles (genera un Excel nuevo, ~50 s)
 ```
 
-Secciones: league table del mes por grupo y por instrumento; composicion del
-volumen de 12 meses; participacion del Grupo BBVA contra los competidores (mes,
-3M, 12M y stock) con drill-down por entidad legal; tramos de plazo con la tasa
-al pactar ponderada; y camadas (originado, tasa y vivo hoy por mes de origen,
-curvas de decaimiento y libro CCS por anio). Todo sobre nocional en USD de
-operaciones vigentes, sin MtM. El PDF lo imprime Chrome sin interfaz (`--chrome`
+Secciones: stock vigente al corte (ranking top 5 + Grupo BBVA con su puesto real,
+general y por instrumento; composicion y participacion cierre a cierre; perfil de
+vencimientos; drill-down legal de BBVA); flujo del mes y de 12 meses como
+complemento, con tramos de plazo y tasa al pactar; y camadas. Todo sobre nocional
+en USD de operaciones vigentes, sin MtM. El PDF lo imprime Chrome sin interfaz (`--chrome`
 o la variable `CHROME` si no esta en la ruta estandar).

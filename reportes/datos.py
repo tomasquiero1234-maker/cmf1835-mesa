@@ -555,6 +555,33 @@ def evolucion_derivados(ctx: Contexto) -> tuple[pd.DataFrame, pd.DataFrame]:
     return aseg, cp
 
 
+def evolucion_deriv_grupo(ctx: Contexto) -> pd.DataFrame:
+    """Nocional vigente de derivados (sin pactos) por mes, instrumento y
+    entidad legal con su grupo, en formato largo. Cada mes al dolar de SU
+    cierre, como Evol_Deriv_Aseguradora. La clasificacion es la misma de las
+    hojas de derivados (un forward UF informado como moneda es Forward UF)."""
+    df = ctx.con.execute(
+        f"SELECT * FROM v_derivado_clasificado WHERE periodo_informacion <= {ctx.periodo}").fetch_df()
+    df = identificar(df)
+    df = _clasificar(df)
+    df = df[df.familia != "Pacto"].copy()
+    df["grupo_contraparte"] = grupo_legible(df["contraparte_grupo"])
+    tc = df.periodo_informacion.map(lambda p: ctx.fx[p][0])
+    df["nocional_mmusd"] = pd.to_numeric(df.nocional_m, errors="coerce") / tc / 1000.0
+    # Nombre y grupo del mes mas reciente de cada entidad: la misma entidad no
+    # se parte en dos filas si un mes se informo con otro nombre.
+    meta = (df.sort_values("periodo_informacion")
+            .groupby("entidad_id")[["entidad_nombre", "grupo_contraparte"]].last())
+    t = (df.groupby(["periodo_informacion", "familia", "entidad_id"])
+           .agg(operaciones=("folio_operacion", "size"), nocional_mmusd=("nocional_mmusd", "sum"))
+           .reset_index().join(meta, on="entidad_id"))
+    t["mes_etiqueta"] = t.periodo_informacion.map(etiqueta_periodo)
+    orden = {f: i for i, f in enumerate(FAMILIAS)}
+    return (t.assign(_o=t.familia.map(orden))
+             .sort_values(["periodo_informacion", "_o", "nocional_mmusd"], ascending=[True, True, False])
+             .drop(columns="_o"))
+
+
 # ---------------------------------------------------------------------------
 #  nocional de derivados: informativo, NUNCA suma al stock
 # ---------------------------------------------------------------------------

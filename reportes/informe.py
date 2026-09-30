@@ -111,7 +111,7 @@ def mes_atras(p: int, k: int) -> int:
 
 def num(x, dec: int = 1, signo: bool = False) -> str:
     """Numero con separadores en castellano: 1.234,5. Vacio como raya."""
-    if x is None or (isinstance(x, float) and math.isnan(x)) or x is pd.NA:
+    if x is None or x is pd.NA or (isinstance(x, (float, np.floating)) and not math.isfinite(x)):
         return "–"
     s = f"{x:+,.{dec}f}" if signo else f"{x:,.{dec}f}"
     return s.replace(",", "\x00").replace(".", ",").replace("\x00", ".")
@@ -189,11 +189,12 @@ class Datos:
     orig: pd.DataFrame         # tbl_originacion
     res: pd.DataFrame          # tbl_camadas_resumen
     cam: pd.DataFrame          # tbl_camadas
+    evol: pd.DataFrame         # tbl_evol_deriv_grupo: stock mensual por instrumento y entidad legal
     vencidas_excluidas: int    # filas de detalle con vencimiento anterior al corte
 
 
 def cargar(xlsx: Path) -> Datos:
-    tablas = ["tbl_portada", "tbl_originacion", "tbl_camadas_resumen", "tbl_camadas"]
+    tablas = ["tbl_portada", "tbl_originacion", "tbl_camadas_resumen", "tbl_camadas", "tbl_evol_deriv_grupo"]
     t = leer_tablas(xlsx, tablas + [v[0] for v in TABLAS_DERIV.values()])
     port = dict(zip(t["tbl_portada"]["Campo"], t["tbl_portada"]["Valor"]))
     corte = _dt.datetime.strptime(str(port["Datos al"]), "%d-%m-%Y").date()
@@ -241,16 +242,20 @@ def cargar(xlsx: Path) -> Datos:
         "Instrumento": "instrumento", "Subyacente": "subyacente", "Mes origen": "mes_origen", "Foto": "foto",
         "Meses desde origen": "meses", "Operaciones vivas": "ops_vivas", "Nocional vivo (MM USD)": "vivo",
         "Nocional originado (MM USD)": "originado", "Vivo (%)": "pct_vivo"})
+    evol = t["tbl_evol_deriv_grupo"].rename(columns={
+        "Periodo": "periodo", "Instrumento": "instrumento", "Grupo contraparte": "grupo",
+        "Contraparte (nombre legal)": "entidad", "ID legal contraparte": "entidad_id", "Operaciones": "operaciones",
+        "Nocional (MM USD)": "nocional"})
     for df, cols in ((orig, ["mes_origen", "operaciones"]), (res, ["mes_origen", "operaciones", "ops_vivas", "ops_tasa"]),
-                     (cam, ["mes_origen", "foto", "meses", "ops_vivas"])):
+                     (cam, ["mes_origen", "foto", "meses", "ops_vivas"]), (evol, ["periodo", "operaciones"])):
         for c in cols:
             df[c] = pd.to_numeric(df[c]).astype(int)
     for df, cols in ((orig, ["nocional"]), (res, ["originado", "vivo", "pct_vivo", "tasa", "tasa_viva"]),
-                     (cam, ["vivo", "originado", "pct_vivo"])):
+                     (cam, ["vivo", "originado", "pct_vivo"]), (evol, ["nocional"])):
         for c in cols:
             df[c] = pd.to_numeric(df[c], errors="coerce")
     return Datos(xlsx, corte, periodo, dolar, dolar_fecha, str(port["Publicacion CMF usada"]),
-                 vig, orig, res, cam, int(vencidas.sum()))
+                 vig, orig, res, cam, evol, int(vencidas.sum()))
 
 
 # ---------------------------------------------------------------------------
@@ -286,6 +291,7 @@ _FMT = {
     "pct": lambda v: pct(v, 1),
     "pct2": lambda v: pct(v, 2),
     "var": lambda v: pct(v, 1, signo=True),
+    "pp": lambda v: num(v, 1, signo=True),
     "pb": lambda v: num(v, 0),
     "n2": lambda v: num(v, 2),
     "n1": lambda v: num(v, 1),
@@ -344,228 +350,331 @@ def _ponderada(v: pd.Series, w: pd.Series) -> float:
 
 
 # ---------------------------------------------------------------------------
-#  1. resumen ejecutivo
+#  rankings: siempre top N + Grupo BBVA con su puesto real
 # ---------------------------------------------------------------------------
 
-def _league(mes: pd.DataFrame, top: int = 10) -> pd.DataFrame:
-    """Ranking por grupo del nocional originado, con apertura por instrumento."""
-    tot = mes.nocional.sum()
-    lt = mes.pivot_table(index="grupo", columns="instrumento", values="nocional", aggfunc="sum", fill_value=0.0)
-    fams = [f for f in FAMILIAS if f in lt.columns]
-    lt = lt[fams]
-    lt.insert(0, "Total", lt.sum(axis=1))
-    lt["ops"] = mes.groupby("grupo").size()
-    lt["entidades"] = mes.groupby("grupo").entidad_id.nunique()
-    lt = lt.sort_values("Total", ascending=False)
-    lt["rank"] = np.arange(1, len(lt) + 1)
-    lt["share"] = lt.Total / tot * 100 if tot else np.nan
-    lt = lt.reset_index()
-    cab = lt.head(top).copy()
-    cab["_fila"] = np.where(cab.grupo == GRUPO_BBVA, "bbva", "")
-    filas = [cab]
-    resto = lt.iloc[top:]
-    if GRUPO_BBVA in set(resto.grupo):
-        b = resto[resto.grupo == GRUPO_BBVA].copy()
-        b["_fila"] = "bbva"
-        filas.append(b)
-        resto = resto[resto.grupo != GRUPO_BBVA]
-    elif GRUPO_BBVA not in set(lt.grupo):
-        filas.append(pd.DataFrame([{"grupo": GRUPO_BBVA, "rank": np.nan, "Total": 0.0, "share": 0.0,
-                                    "ops": 0, "entidades": 0, **{f: 0.0 for f in fams}, "_fila": "bbva"}]))
-    if len(resto):
-        r = resto[["Total", "ops", "entidades"] + fams].sum()
-        filas.append(pd.DataFrame([{"grupo": f"Resto ({len(resto)} grupos)", "rank": np.nan, **r.to_dict(),
-                                    "share": r.Total / tot * 100, "_fila": "resto"}]))
-    t = lt[["Total", "ops", "entidades"] + fams].sum()
-    filas.append(pd.DataFrame([{"grupo": "Total industria", "rank": np.nan, **t.to_dict(), "share": 100.0,
-                                "_fila": "total"}]))
-    return pd.concat(filas, ignore_index=True), fams
+def top_mas_bbva(t: pd.DataFrame, col: str, n: int = 5, resto: bool = True,
+                 no_sumar: tuple[str, ...] = (), totales: dict | None = None) -> pd.DataFrame:
+    """Top n grupos por `col`, MAS el Grupo BBVA con su puesto real aunque este
+    fuera del top, mas 'Resto' y 'Total'.
 
+    t: una fila por grupo (indice = grupo) con columnas numericas. Las columnas
+    de `no_sumar` (conteos de valores distintos, como aseguradoras) quedan
+    vacias en Resto y toman el valor de `totales` en la fila Total.
+    """
+    t = t.copy().sort_values(col, ascending=False)
+    pos = t[t[col] > 0]
+    t["rank"] = pd.Series(np.arange(1, len(pos) + 1), index=pos.index).reindex(t.index)
+    tot = t[col].sum()
+    t["share"] = t[col] / tot * 100 if tot else np.nan
+    top = t[t["rank"] <= n]
+    partes = [top]
+    if GRUPO_BBVA not in top.index:
+        partes.append(t.loc[[GRUPO_BBVA]] if GRUPO_BBVA in t.index else
+                      pd.DataFrame({c: [0.0] for c in t.columns if c != "rank"} | {"rank": [np.nan]},
+                                   index=[GRUPO_BBVA]))
+    mostrados = set(pd.concat(partes).index)
+    numericas = [c for c in t.columns if c != "rank" and pd.api.types.is_numeric_dtype(t[c])]
+    sumables = [c for c in numericas if c not in no_sumar]
+    r = t[~t.index.isin(mostrados)]
+    if resto and len(r):
+        fila = r[sumables].sum().to_dict() | {c: np.nan for c in no_sumar} | {"rank": np.nan}
+        partes.append(pd.DataFrame([fila], index=[f"Resto ({len(r)} grupos)"]))
+    fila = t[sumables].sum().to_dict() | dict(totales or {}) | {"rank": np.nan, "share": 100.0}
+    partes.append(pd.DataFrame([fila], index=["Total"]))
+    out = pd.concat(partes)
+    out.index.name = "grupo"
+    out = out.reset_index()
+    out["_fila"] = np.select([out.grupo == GRUPO_BBVA, out.grupo.str.startswith("Resto ("), out.grupo == "Total"],
+                             ["bbva", "resto", "total"], "")
+    return out
+
+
+def puesto_bbva(serie: pd.Series) -> tuple[int | None, int]:
+    """(puesto del Grupo BBVA, cantidad de grupos con posicion) en una serie grupo -> valor."""
+    s = serie[serie > 0].sort_values(ascending=False)
+    return (list(s.index).index(GRUPO_BBVA) + 1 if GRUPO_BBVA in s.index else None), len(s)
+
+
+def _fila_bbva_txt(share: float, rk: int | None, n: int) -> str:
+    return f"{pct(share)} · puesto {rk} de {n}" if rk else "sin posición"
+
+
+# ---------------------------------------------------------------------------
+#  1. resumen ejecutivo: el STOCK al corte
+# ---------------------------------------------------------------------------
 
 def seccion_resumen(d: Datos) -> dict:
-    p = d.periodo
-    mes = d.vig[d.vig.mes_origen == p]
-    tot, nops = mes.nocional.sum(), len(mes)
-    serie = d.orig.groupby("mes_origen").nocional.sum()
-    prev = serie.get(mes_atras(p, 1), np.nan)
-    prom12 = serie.reindex([mes_atras(p, k) for k in range(1, 13)]).mean()
-    stock = d.vig.nocional.sum()
+    p, v, ev = d.periodo, d.vig, d.evol
+    stock = v.nocional.sum()
+    tot_m = ev.groupby("periodo").nocional.sum()
+    p_prev, p_dic = mes_atras(p, 1), (p // 100 - 1) * 100 + 12
+    s_prev, s_dic = tot_m.get(p_prev, np.nan), tot_m.get(p_dic, np.nan)
 
-    lt, fams = _league(mes)
-    cols = ([("#", "rank", "int"), ("Grupo contraparte", "grupo", "txt"), ("Nocional originado", "Total", "mm"),
-             ("Part. %", "share", "pct")]
-            + [(NOMBRE_FAM[f], f, "mm") for f in fams]
-            + [("Oper.", "ops", "int"), ("Ent. legales", "entidades", "int")])
-    league = tabla(lt, cols, "league",
-                   f"MM USD de nocional. Operaciones vigentes al {d.corte:%d-%m-%Y} con fecha de operación en "
-                   f"{mes_corto(p)}. Grupo según el catálogo de entidades; la apertura por entidad legal está en la "
-                   f"hoja Originacion del Excel.")
+    # ranking del stock por grupo, con apertura por instrumento y participacion a diciembre
+    pv = v.pivot_table(index="grupo", columns="instrumento", values="nocional", aggfunc="sum", fill_value=0.0)
+    fams = [f for f in FAMILIAS if f in pv.columns]
+    pv = pv[fams]
+    pv.insert(0, "Total", pv.sum(axis=1))
+    g_dic = ev[ev.periodo == p_dic].groupby("grupo").nocional.sum()
+    pv = pv.reindex(pv.index.union(g_dic.index), fill_value=0.0)
+    pv["ops"] = v.groupby("grupo").size().reindex(pv.index).fillna(0)
+    pv["clientes"] = v.groupby("grupo").aseguradora.nunique().reindex(pv.index).fillna(0)
+    pv["s_dic"] = (g_dic / g_dic.sum() * 100).reindex(pv.index).fillna(0.0)
+    rk = top_mas_bbva(pv, "Total", 5, no_sumar=("clientes",), totales={"clientes": v.aseguradora.nunique(), "s_dic": 100.0})
+    rk["d_pp"] = rk.share - rk.s_dic
+    ranking = tabla(rk, [("#", "rank", "int"), ("Grupo contraparte", "grupo", "txt"), ("Stock vigente", "Total", "mm"),
+                         ("Part. %", "share", "pct"), (f"Part. {mes_corto(p_dic)}", "s_dic", "pct"),
+                         ("Var. pp", "d_pp", "pp")]
+                    + [(NOMBRE_FAM[f], f, "mm") for f in fams]
+                    + [("Oper.", "ops", "int"), ("Aseg.", "clientes", "int")], "league",
+                    f"MM USD de nocional vigente al {d.corte:%d-%m-%Y}. Top 5 grupos y el Grupo BBVA con su puesto "
+                    f"real. Part. {mes_corto(p_dic)}: participación en el stock de ese cierre; Var. pp: cambio en "
+                    "puntos porcentuales. Aseg.: aseguradoras con posición vigente con el grupo.")
 
-    # top 5 por instrumento
+    # top 5 + BBVA por instrumento, en stock
     por_inst = []
     for f in fams:
-        m = mes[mes.instrumento == f]
-        g = m.groupby("grupo").nocional.sum().sort_values(ascending=False)
-        top = g.head(5).rename("noc").reset_index()
-        top["share"] = top.noc / g.sum() * 100
-        top["rank"] = np.arange(1, len(top) + 1)
-        top["_fila"] = np.where(top.grupo == GRUPO_BBVA, "bbva", "")
-        por_inst.append({"titulo": NOMBRE_FAM[f], "total": num(g.sum(), 1), "ops": len(m),
-                         "tabla": tabla(top, [("#", "rank", "int"), ("Grupo", "grupo", "txt"),
-                                              ("MM USD", "noc", "mm"), ("Part. %", "share", "pct")], "mini")})
+        vf = v[v.instrumento == f]
+        g = vf.groupby("grupo").agg(noc=("nocional", "sum"))
+        t = top_mas_bbva(g, "noc", 5, resto=False)
+        t = t[t._fila != "total"]
+        por_inst.append({"titulo": NOMBRE_FAM[f], "total": num(vf.nocional.sum(), 1), "ops": len(vf),
+                         "tabla": tabla(t, [("#", "rank", "int"), ("Grupo", "grupo", "txt"),
+                                            ("MM USD", "noc", "mm"), ("Part. %", "share", "pct")], "mini")})
 
-    # composicion mensual por instrumento, ultimos 12 meses
-    meses = [mes_atras(p, k) for k in range(11, -1, -1)]
-    comp = (d.orig[d.orig.mes_origen.isin(meses)]
-            .pivot_table(index="mes_origen", columns="instrumento", values="nocional", aggfunc="sum", fill_value=0.0)
-            .reindex(index=meses, fill_value=0.0))
+    # composicion del stock por instrumento, mes a mes
+    pers = sorted(ev.periodo.unique())
+    comp = (ev.pivot_table(index="periodo", columns="instrumento", values="nocional", aggfunc="sum", fill_value=0.0)
+            .reindex(index=pers, fill_value=0.0))
     fams_c = [f for f in FAMILIAS if f in comp.columns]
+    x = [mes_corto(m) for m in pers]
     fig = _fig(390)
     for f in fams_c:
-        fig.add_bar(x=[mes_corto(m) for m in meses], y=comp[f], name=NOMBRE_FAM[f], marker_color=COLOR_FAM[f],
+        fig.add_bar(x=x, y=comp[f], name=NOMBRE_FAM[f], marker_color=COLOR_FAM[f],
                     customdata=np.stack([comp[f] / comp[fams_c].sum(axis=1) * 100], axis=-1),
-                    hovertemplate=f"<b>{NOMBRE_FAM[f]}</b> %{{x}}<br>%{{y:,.1f}} MM USD (%{{customdata[0]:.1f}}% del mes)"
+                    hovertemplate=f"<b>{NOMBRE_FAM[f]}</b> %{{x}}<br>%{{y:,.1f}} MM USD (%{{customdata[0]:.1f}}% del stock)"
                                   "<extra></extra>")
     totales = comp[fams_c].sum(axis=1)
-    fig.add_scatter(x=[mes_corto(m) for m in meses], y=totales, mode="text", text=[num(v, 0) for v in totales],
-                    textposition="top center", textfont=dict(size=11, color=TEXTO), showlegend=False, hoverinfo="skip")
+    fig.add_scatter(x=x, y=totales, mode="text", text=[num(t / 1000, 1) + " mil" for t in totales],
+                    textposition="top center", textfont=dict(size=10, color=TEXTO), showlegend=False, hoverinfo="skip")
     fig.update_layout(barmode="stack", legend=dict(traceorder="normal"),
-                      yaxis=dict(title="MM USD de nocional originado", tickformat=",.0f",
-                                 range=[0, totales.max() * 1.12]))
-    fig.add_vrect(x0=len(meses) - 1.5, x1=len(meses) - 0.5, fillcolor=AZUL_CLARO, opacity=0.10, line_width=0)
-    comp_t = comp[fams_c].T.copy()
-    comp_t.columns = [mes_corto(m) for m in meses]
-    comp_t.loc["Total"] = comp_t.sum()
-    comp_t = comp_t.reset_index().rename(columns={"instrumento": "Instrumento", "index": "Instrumento"})
-    comp_t["Instrumento"] = comp_t["Instrumento"].map(lambda f: NOMBRE_FAM.get(f, f))
-    comp_t["_fila"] = np.where(comp_t.Instrumento == "Total", "total", "")
-    tabla_comp = tabla(comp_t, [("Instrumento", "Instrumento", "txt")]
-                       + [(c, c, "mm0") for c in comp_t.columns if c not in ("Instrumento", "_fila")], "compacta")
+                      yaxis=dict(title="MM USD de nocional vigente", tickformat=",.0f", range=[0, totales.max() * 1.12]))
+    fig.add_vrect(x0=len(x) - 1.5, x1=len(x) - 0.5, fillcolor=AZUL_CLARO, opacity=0.10, line_width=0)
+    comp_t = pd.DataFrame({"Instrumento": [NOMBRE_FAM[f] for f in fams_c],
+                           "actual": [comp.loc[p, f] for f in fams_c],
+                           "prev": [comp.loc[p_prev, f] if p_prev in comp.index else np.nan for f in fams_c],
+                           "dic": [comp.loc[p_dic, f] if p_dic in comp.index else np.nan for f in fams_c]})
+    comp_t = pd.concat([comp_t, pd.DataFrame([{"Instrumento": "Total", "actual": comp_t.actual.sum(),
+                                               "prev": comp_t.prev.sum(), "dic": comp_t.dic.sum(), "_fila": "total"}])],
+                       ignore_index=True)
+    comp_t["_fila"] = comp_t.get("_fila", pd.Series(dtype=str)).fillna("")
+    comp_t["part"] = comp_t.actual / comp_t.actual.iloc[-1] * 100
+    comp_t["v_prev"] = (comp_t.actual / comp_t.prev - 1) * 100
+    comp_t["v_dic"] = (comp_t.actual / comp_t.dic - 1) * 100
+    tabla_comp = tabla(comp_t, [("Instrumento", "Instrumento", "txt"), (f"Stock {mes_corto(p)}", "actual", "mm"),
+                                ("% del stock", "part", "pct"), (f"Stock {mes_corto(p_prev)}", "prev", "mm"),
+                                (f"Var. vs {mes_corto(p_prev)}", "v_prev", "var"),
+                                (f"Stock {mes_corto(p_dic)}", "dic", "mm"), (f"Var. vs {mes_corto(p_dic)}", "v_dic", "var")],
+                       "compacta", "MM USD de nocional vigente; cada cierre a su dólar, así que la variación incluye "
+                                   "el efecto cambiario.")
 
-    # participacion BBVA para KPIs y lectura
-    o12 = d.orig[d.orig.mes_origen.isin(meses)]
-    g12 = o12.groupby("grupo").nocional.sum().sort_values(ascending=False)
-    bbva12 = g12.get(GRUPO_BBVA, 0.0)
-    rank12 = (list(g12.index).index(GRUPO_BBVA) + 1) if GRUPO_BBVA in g12.index else None
-    bbva_mes = mes[mes.grupo == GRUPO_BBVA].nocional.sum()
-    gm = mes.groupby("grupo").nocional.sum().sort_values(ascending=False)
-    fam_mes = mes.groupby("instrumento").nocional.sum().sort_values(ascending=False)
-    ult_bbva = d.vig[d.vig.grupo == GRUPO_BBVA].fecha_operacion.max()
-
+    # KPIs y lectura, todo en stock
+    g_st = v.groupby("grupo").nocional.sum().sort_values(ascending=False)
+    rk_b, n_g = puesto_bbva(g_st)
+    rk_dic, n_dic = puesto_bbva(g_dic)
+    b_st = g_st.get(GRUPO_BBVA, 0.0)
+    top5 = g_st.head(5)
+    b_inst = []
+    for f in fams:
+        gf = v[v.instrumento == f].groupby("grupo").nocional.sum()
+        r_, n_ = puesto_bbva(gf)
+        if r_:
+            b_inst.append((f, gf[GRUPO_BBVA] / gf.sum() * 100, r_, n_))
+    fam_st = v.groupby("instrumento").nocional.sum().sort_values(ascending=False)
+    mes = v[v.mes_origen == p]
+    ult_bbva = v[v.grupo == GRUPO_BBVA].fecha_operacion.max()
     kpis = [
-        {"titulo": f"Nocional originado {mes_corto(p)}", "valor": num(tot, 1), "unidad": "MM USD",
-         "nota": f"{num(nops, 0)} operaciones · {pct((tot / prev - 1) * 100, 1, True)} vs {mes_corto(mes_atras(p, 1))}"},
-        {"titulo": "Promedio mensual 12 meses previos", "valor": num(prom12, 1), "unidad": "MM USD",
-         "nota": f"{mes_corto(mes_atras(p, 12))} a {mes_corto(mes_atras(p, 1))}"},
-        {"titulo": "Stock vigente de derivados", "valor": num(stock, 1), "unidad": "MM USD nocional",
-         "nota": f"{num(len(d.vig), 0)} operaciones al {d.corte:%d-%m-%Y}"},
-        {"titulo": f"Grupo BBVA en {mes_corto(p)}", "valor": pct(bbva_mes / tot * 100 if tot else np.nan, 1),
-         "unidad": "del nocional originado", "clase": "bbva",
-         "nota": (f"12 meses: {pct(bbva12 / g12.sum() * 100, 1)}"
-                  + (f" (puesto {rank12} de {len(g12)})" if rank12 else " (sin originación)"))},
+        {"titulo": f"Stock vigente al {d.corte:%d-%m-%Y}", "valor": num(stock, 1), "unidad": "MM USD de nocional",
+         "nota": f"{num(len(v), 0)} oper. · {pct((stock / s_prev - 1) * 100, 1, True)} vs {mes_corto(p_prev)}"},
+        {"titulo": f"Variación desde {mes_corto(p_dic)}", "valor": pct((stock / s_dic - 1) * 100, 1, True),
+         "unidad": "del stock (incluye efecto cambiario)", "nota": f"{mes_corto(p_dic)}: {num(s_dic, 1)} MM USD"},
+        {"titulo": "Concentración top 5 grupos", "valor": pct(top5.sum() / stock * 100), "unidad": "del stock",
+         "nota": f"de {n_g} grupos con posición vigente"},
+        {"titulo": "Grupo BBVA en el stock", "valor": pct(b_st / stock * 100), "unidad": f"{num(b_st, 1)} MM USD",
+         "clase": "bbva", "nota": (f"puesto {rk_b} de {n_g}" if rk_b else "sin posición")
+                                  + (f" · {mes_corto(p_dic)}: puesto {rk_dic}" if rk_dic else "")},
     ]
-    top3 = gm.head(3).sum() / tot * 100 if tot else np.nan
-    o_tot, v_tot = d.res.originado.sum(), d.res.vivo.sum()
-    vivo_fam = d.res.groupby("instrumento")[["originado", "vivo"]].sum()
-    vivo_fam = (vivo_fam.vivo / vivo_fam.originado * 100).reindex([f for f in FAMILIAS if f in vivo_fam.index])
     lectura = [
-        f"{mes_corto(p).capitalize()}: {num(tot, 1)} MM USD originados en {num(nops, 0)} operaciones vigentes, "
-        f"{pct((tot / prev - 1) * 100, 1, True)} contra {mes_corto(mes_atras(p, 1))} y "
-        f"{pct((tot / prom12 - 1) * 100, 1, True)} contra el promedio de los 12 meses previos ({num(prom12, 1)}).",
-        f"Lidera {gm.index[0]} con {num(gm.iloc[0], 1)} MM USD ({pct(gm.iloc[0] / tot * 100)}); los tres primeros "
-        f"grupos suman {pct(top3)}. Operaron {len(gm)} grupos y {mes.entidad_id.nunique()} entidades legales.",
-        "Mezcla del mes: " + ", ".join(f"{NOMBRE_FAM[f]} {pct(v / tot * 100)}" for f, v in fam_mes.items()) + ".",
-        f"Grupo BBVA: {num(bbva_mes, 1)} MM USD en {mes_corto(p)}"
-        + (f" (última operación vigente: {ult_bbva:%d-%m-%Y})" if bbva_mes == 0 and not pd.isna(ult_bbva) else "")
-        + f"; {num(bbva12, 1)} MM USD en 12 meses ({pct(bbva12 / g12.sum() * 100)} del total"
-        + (f", puesto {rank12} de {len(g12)} grupos)." if rank12 else ")."),
-        f"Camadas: de {num(o_tot, 1)} MM USD originados desde {mes_corto(d.res.mes_origen.min())} siguen vivos "
-        f"{num(v_tot, 1)} ({pct(v_tot / o_tot * 100)}): "
-        + ", ".join(f"{NOMBRE_FAM[f]} {pct(v)}" for f, v in vivo_fam.items() if f in ("CCS", "Forward FX")) + " vivo.",
+        f"Stock vigente de derivados al {d.corte:%d-%m-%Y}: {num(stock, 1)} MM USD de nocional en {num(len(v), 0)} "
+        f"operaciones con {n_g} grupos; {pct((stock / s_prev - 1) * 100, 1, True)} contra {mes_corto(p_prev)} y "
+        f"{pct((stock / s_dic - 1) * 100, 1, True)} contra {mes_corto(p_dic)} (cada cierre a su dólar).",
+        "Top 5 del stock: " + ", ".join(f"{g} {pct(x / stock * 100)}" for g, x in top5.items())
+        + f"; concentran {pct(top5.sum() / stock * 100)}.",
+        f"Grupo BBVA: {num(b_st, 1)} MM USD, {pct(b_st / stock * 100)} del stock, puesto {rk_b} de {n_g}"
+        + (f" ({mes_corto(p_dic)}: {pct(g_dic.get(GRUPO_BBVA, 0) / g_dic.sum() * 100)}, puesto {rk_dic})" if rk_dic else "")
+        + ". Por instrumento: " + "; ".join(f"{NOMBRE_FAM[f]} {pct(sh)}, puesto {r_} de {n_}" for f, sh, r_, n_ in b_inst)
+        + ".",
+        "Mezcla del stock: " + ", ".join(f"{NOMBRE_FAM[f]} {pct(x / stock * 100)}" for f, x in fam_st.items()) + ".",
+        f"Flujo de {mes_corto(p)} (sección 3): {num(mes.nocional.sum(), 1)} MM USD originados; Grupo BBVA "
+        f"{num(mes[mes.grupo == GRUPO_BBVA].nocional.sum(), 1)}"
+        + (f" (su operación vigente más reciente es del {ult_bbva:%d-%m-%Y})." if not pd.isna(ult_bbva) else "."),
     ]
-    return {"kpis": kpis, "lectura": lectura, "league": league, "por_instrumento": por_inst,
+    return {"kpis": kpis, "lectura": lectura, "ranking": ranking, "por_instrumento": por_inst,
             "graf_composicion": html_fig(fig, "g_composicion"), "tabla_composicion": tabla_comp,
-            "_tot": tot, "_prom12": prom12, "_serie": serie}
+            "_stock": stock, "_ranking": rk}
 
 
 # ---------------------------------------------------------------------------
-#  2. participacion de mercado y BBVA
+#  2. participacion en el stock: Grupo BBVA contra el top 5
 # ---------------------------------------------------------------------------
 
 def seccion_mercado(d: Datos) -> dict:
-    p = d.periodo
-    mes = d.vig[d.vig.mes_origen == p]
-    tot = mes.nocional.sum()
-    m12 = [mes_atras(p, k) for k in range(12)]
-    m3 = [mes_atras(p, k) for k in range(3)]
-    o12, o3 = d.orig[d.orig.mes_origen.isin(m12)], d.orig[d.orig.mes_origen.isin(m3)]
-    g_mes = mes.groupby("grupo").nocional.sum()
-    g3, g12 = o3.groupby("grupo").nocional.sum(), o12.groupby("grupo").nocional.sum()
-    g_st = d.vig.groupby("grupo").nocional.sum()
+    p, v, ev = d.periodo, d.vig, d.evol
+    stock = v.nocional.sum()
+    g_st = v.groupby("grupo").nocional.sum()
+    t = top_mas_bbva(g_st.to_frame("stock"), "stock", 5)
+    grupos = t[~t._fila.isin(["resto", "total"])]
 
-    top = g_mes.drop(GRUPO_BBVA, errors="ignore").sort_values(ascending=False).head(9).index.tolist()
-    t = pd.DataFrame({"grupo": top + [GRUPO_BBVA]})
-    t["mes"] = t.grupo.map(g_mes).fillna(0.0)
-    t["s_mes"] = t.mes / tot * 100
-    t["s_3m"] = t.grupo.map(g3).fillna(0.0) / g3.sum() * 100
-    t["m12"] = t.grupo.map(g12).fillna(0.0)
-    t["s_12m"] = t.m12 / g12.sum() * 100
-    t["stock"] = t.grupo.map(g_st).fillna(0.0)
-    t["s_stock"] = t.stock / g_st.sum() * 100
-
-    def rango(g: pd.Series) -> dict:
-        return {k: i + 1 for i, k in enumerate(g[g > 0].sort_values(ascending=False).index)}
-
-    t["r_mes"], t["r_12m"], t["r_stock"] = t.grupo.map(rango(g_mes)), t.grupo.map(rango(g12)), t.grupo.map(rango(g_st))
-    t["_fila"] = np.where(t.grupo == GRUPO_BBVA, "bbva", "")
-    tabla_share = tabla(t, [("Grupo contraparte", "grupo", "txt"),
-                            (f"{mes_corto(p)} MM USD", "mes", "mm"), ("Part. mes", "s_mes", "pct"),
-                            ("#", "r_mes", "int"), ("Part. 3M", "s_3m", "pct"),
-                            ("12M MM USD", "m12", "mm"), ("Part. 12M", "s_12m", "pct"), ("# 12M", "r_12m", "int"),
-                            ("Stock vigente", "stock", "mm"), ("Part. stock", "s_stock", "pct"),
-                            ("# stock", "r_stock", "int")],
-                        "share",
-                        f"Participación sobre nocional. Mes, 3M y 12M: originación ({mes_corto(m3[-1])} a "
-                        f"{mes_corto(p)} y {mes_corto(m12[-1])} a {mes_corto(p)}). Stock: todo lo vigente al "
-                        f"{d.corte:%d-%m-%Y}, cualquiera sea su fecha de operación. Top 9 competidores por originación "
-                        f"del mes. #: puesto entre {len(g_mes)} grupos con originación en el mes, {len(g12)} en 12 "
-                        f"meses y {len(g_st)} con stock.")
-
-    # barras: participacion del mes
-    b = t.sort_values("s_mes")
-    fig = _fig(330)
-    fig.add_bar(y=b.grupo, x=b.s_mes, orientation="h",
+    # barras: participacion en el stock
+    b = grupos.iloc[::-1]
+    etiquetas = [f"{g}  (#{int(r)})" if g == GRUPO_BBVA and not pd.isna(r) else g for g, r in zip(b.grupo, b["rank"])]
+    fig = _fig(300)
+    fig.add_bar(y=etiquetas, x=b.share, orientation="h",
                 marker_color=[AZUL_MEDIO if g == GRUPO_BBVA else GRIS for g in b.grupo],
-                text=[pct(v) for v in b.s_mes], textposition="outside", cliponaxis=False,
-                customdata=b.mes, hovertemplate="<b>%{y}</b><br>%{x:.1f}% · %{customdata:,.1f} MM USD<extra></extra>",
-                showlegend=False)
-    fig.update_layout(xaxis=dict(title=f"Participación en el nocional originado en {mes_corto(p)} (%)",
-                                 ticksuffix="%", range=[0, max(b.s_mes.max() * 1.18, 5)]),
-                      margin=dict(l=250, r=40, t=10, b=50))
-    if g_mes.get(GRUPO_BBVA, 0.0) == 0:
-        fig.add_annotation(y=GRUPO_BBVA, x=0, xanchor="left", xshift=46, showarrow=False,
-                           text=f"sin originación en {mes_corto(p)}", font=dict(color=AZUL_MEDIO, size=11))
+                text=[f"{pct(s_)} · {num(m, 0)} MM USD" for s_, m in zip(b.share, b.stock)], textposition="outside",
+                cliponaxis=False, hovertemplate="<b>%{y}</b><br>%{x:.1f}% del stock<extra></extra>", showlegend=False)
+    fig.update_layout(xaxis=dict(title=f"Participación en el stock vigente al {d.corte:%d-%m-%Y} (%)", ticksuffix="%",
+                                 range=[0, b.share.max() * 1.35]), margin=dict(l=230, r=40, t=10, b=50))
+    resto = t[t._fila == "resto"]
 
-    # lineas: participacion movil de 3 meses de BBVA y los 5 mayores de 12M
-    pers = sorted(d.orig.mes_origen.unique())
-    movil = lambda s: s.reindex(pers, fill_value=0.0).rolling(3, min_periods=3).sum()  # noqa: E731
-    tot_m = movil(d.orig.groupby("mes_origen").nocional.sum())
-    comp5 = g12.drop(GRUPO_BBVA, errors="ignore").sort_values(ascending=False).head(5).index.tolist()
+    # lineas: participacion mensual en el stock, top 5 actual + BBVA
+    pers = sorted(ev.periodo.unique())
+    tot_m = ev.groupby("periodo").nocional.sum()
     fig2 = _fig(360)
     x = [mes_corto(m) for m in pers]
     rayas = ["solid", "dash", "dot", "dashdot", "longdash"]
-    for i, g in enumerate(comp5):
-        sh = movil(d.orig[d.orig.grupo == g].groupby("mes_origen").nocional.sum()) / tot_m * 100
+    for i, g in enumerate([g for g in grupos.grupo if g != GRUPO_BBVA]):
+        sh = ev[ev.grupo == g].groupby("periodo").nocional.sum().reindex(pers, fill_value=0.0) / tot_m * 100
         fig2.add_scatter(x=x, y=sh, name=g, mode="lines", line=dict(color=COLOR_COMP[i], width=1.8, dash=rayas[i]),
-                         hovertemplate=f"<b>{g}</b> 3M a %{{x}}: %{{y:.1f}}%<extra></extra>")
-    sb = movil(d.orig[d.orig.grupo == GRUPO_BBVA].groupby("mes_origen").nocional.sum()) / tot_m * 100
+                         hovertemplate=f"<b>{g}</b> %{{x}}: %{{y:.1f}}% del stock<extra></extra>")
+    sb = ev[ev.grupo == GRUPO_BBVA].groupby("periodo").nocional.sum().reindex(pers, fill_value=0.0) / tot_m * 100
     fig2.add_scatter(x=x, y=sb, name=GRUPO_BBVA, mode="lines+markers", line=dict(color=AZUL_MEDIO, width=3.5),
-                     marker=dict(size=6), hovertemplate="<b>Grupo BBVA</b> 3M a %{x}: %{y:.1f}%<extra></extra>")
-    fig2.update_layout(yaxis=dict(title="Participación móvil 3 meses (%)", ticksuffix="%", rangemode="tozero"),
-                       xaxis=dict(range=[1.5, len(x) - 0.5]))
+                     marker=dict(size=6), hovertemplate="<b>Grupo BBVA</b> %{x}: %{y:.1f}% del stock<extra></extra>")
+    fig2.update_layout(yaxis=dict(title="Participación en el stock (%)", ticksuffix="%", rangemode="tozero"))
+    rk_mes = {m: puesto_bbva(ev[ev.periodo == m].groupby("grupo").nocional.sum()) for m in pers}
+    evol_bbva = pd.DataFrame({"mes": x, "stock": [ev[(ev.periodo == m) & (ev.grupo == GRUPO_BBVA)].nocional.sum()
+                                                  for m in pers],
+                              "share": sb.values, "rank": [rk_mes[m][0] for m in pers],
+                              "n": [rk_mes[m][1] for m in pers]})
 
-    return {"tabla_share": tabla_share, "graf_share_mes": html_fig(fig, "g_share_mes"),
-            "graf_share_evol": html_fig(fig2, "g_share_evol"), "_share": t, **_bbva(d, g_mes, m12)}
+    # participacion por instrumento: top 5 + BBVA en filas, instrumentos en columnas
+    fams = [f for f in FAMILIAS if f in set(v.instrumento)]
+    mat = pd.DataFrame({"grupo": grupos.grupo.tolist()})
+    for f in fams:
+        gf = v[v.instrumento == f].groupby("grupo").nocional.sum()
+        mat[f] = mat.grupo.map(gf / gf.sum() * 100).fillna(0.0)
+    mat["Total"] = mat.grupo.map(g_st / stock * 100).fillna(0.0)
+    fila_rk = {"grupo": "Puesto del Grupo BBVA"}
+    for f in fams + ["Total"]:
+        r_, n_ = puesto_bbva(v[v.instrumento == f].groupby("grupo").nocional.sum() if f != "Total" else g_st)
+        fila_rk[f] = f"{r_} de {n_}" if r_ else "sin posición"
+    mat["_fila"] = np.where(mat.grupo == GRUPO_BBVA, "bbva", "")
+    mat_txt = mat.copy()
+    for c in fams + ["Total"]:
+        mat_txt[c] = mat[c].map(lambda z: pct(z))
+    mat_txt = pd.concat([mat_txt, pd.DataFrame([fila_rk | {"_fila": "total"}])], ignore_index=True)
+    tabla_mat = tabla(mat_txt, [("Grupo contraparte", "grupo", "txt")]
+                      + [(NOMBRE_FAM[f], f, "txt") for f in fams] + [("Total derivados", "Total", "txt")],
+                      "share num-txt", "Participación de cada grupo en el stock vigente de cada instrumento. Filas: top 5 "
+                                       "del stock total y el Grupo BBVA.")
+
+    # perfil de vencimientos: stock por plazo residual y participacion de BBVA en cada tramo
+    vr = v.assign(resid=(v.fecha_vencimiento - pd.Timestamp(d.corte)).dt.days)
+    vr["tramo"] = pd.cut(vr.resid, TRAMOS_DIAS, labels=TRAMOS, right=True)
+    tr = vr.pivot_table(index="tramo", columns="instrumento", values="nocional", aggfunc="sum", fill_value=0.0,
+                        observed=False).reindex(TRAMOS, fill_value=0.0)
+    tr = tr.loc[tr.sum(axis=1) > 0]
+    tb = vr[vr.grupo == GRUPO_BBVA].groupby("tramo", observed=False).nocional.sum().reindex(tr.index, fill_value=0.0)
+    sh_b = tb / tr.sum(axis=1) * 100
+    fig3 = _fig(340)
+    for f in [f for f in FAMILIAS if f in tr.columns]:
+        fig3.add_bar(x=list(tr.index), y=tr[f], name=NOMBRE_FAM[f], marker_color=COLOR_FAM[f],
+                     hovertemplate=f"<b>{NOMBRE_FAM[f]}</b> %{{x}}: %{{y:,.1f}} MM USD<extra></extra>")
+    fig3.add_scatter(x=list(tr.index), y=sh_b, name="Participación Grupo BBVA en el tramo (%)", yaxis="y2",
+                     mode="lines+markers+text", text=[pct(z) for z in sh_b], textposition="top center",
+                     textfont=dict(color=AZUL_MEDIO, size=10), line=dict(color=AZUL_MEDIO, width=3), marker=dict(size=7),
+                     hovertemplate="%{x}: Grupo BBVA %{y:.1f}% del tramo<extra></extra>")
+    r_barras, r_linea = rangos_doble_eje(tr.sum(axis=1).max(), sh_b)
+    fig3.update_layout(barmode="stack", margin=dict(l=70, r=80, t=40, b=50),
+                       legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0, traceorder="normal"),
+                       yaxis=dict(title="MM USD de nocional vigente", tickformat=",.0f", range=r_barras),
+                       yaxis2=dict(title="Grupo BBVA en el tramo", overlaying="y", side="right", showgrid=False,
+                                   showticklabels=False, zeroline=False, range=r_linea,
+                                   title_font=dict(color=AZUL_MEDIO)),
+                       xaxis=dict(title="Plazo residual: del corte al vencimiento"))
+
+    # flujo del mes, solo para el drill-down (columna de originacion)
+    mes = v[v.mes_origen == p]
+    m12 = [mes_atras(p, k) for k in range(12)]
+    return {"graf_share_stock": html_fig(fig, "g_share_stock"), "graf_share_evol": html_fig(fig2, "g_share_evol"),
+            "resto_txt": (f"{resto.grupo.iloc[0]}: {pct(resto.share.iloc[0])} del stock." if len(resto) else ""),
+            "tabla_evol_bbva": _tabla_evol_bbva(evol_bbva.tail(12)),
+            "tabla_mat": tabla_mat, "graf_vencimientos": html_fig(fig3, "g_vencimientos"),
+            "_share": t, "_mat": mat, "_evol_bbva": evol_bbva, **_bbva(d, mes.groupby("grupo").nocional.sum(), m12)}
+
+
+def _tabla_evol_bbva(e: pd.DataFrame) -> Markup:
+    """Grupo BBVA mes a mes en el stock: meses en columnas."""
+    filas = [{"concepto": "Stock Grupo BBVA (MM USD)", **{m: num(x, 1) for m, x in zip(e.mes, e.stock)}},
+             {"concepto": "Participación en el stock", **{m: pct(x) for m, x in zip(e.mes, e.share)}},
+             {"concepto": "Puesto", **{m: (f"{int(r)} de {n}" if not pd.isna(r) else "\u2013")
+                                      for m, r, n in zip(e.mes, e["rank"], e.n)}}]
+    df = pd.DataFrame(filas)
+    df["_fila"] = ["", "bbva", ""]
+    return tabla(df, [("", "concepto", "txt")] + [(m, m, "txt") for m in e.mes], "compacta num-txt",
+                 "Cada cierre a su dólar. Puesto entre los grupos con posición vigente ese mes.")
+
+
+# ---------------------------------------------------------------------------
+#  3. flujo: originacion del mes y de 12 meses (complemento del stock)
+# ---------------------------------------------------------------------------
+
+def seccion_flujo(d: Datos) -> dict:
+    p = d.periodo
+    mes = d.vig[d.vig.mes_origen == p]
+    tot = mes.nocional.sum()
+    m12 = [mes_atras(p, k) for k in range(11, -1, -1)]
+    o12 = d.orig[d.orig.mes_origen.isin(m12)]
+    serie = d.orig.groupby("mes_origen").nocional.sum()
+    prev = serie.get(mes_atras(p, 1), np.nan)
+
+    def rk(df: pd.DataFrame, col_noc: str) -> pd.DataFrame:
+        g = df.groupby("grupo").agg(noc=(col_noc, "sum"))
+        return top_mas_bbva(g, "noc", 5)
+
+    cols = [("#", "rank", "int"), ("Grupo contraparte", "grupo", "txt"), ("MM USD", "noc", "mm"), ("Part. %", "share", "pct")]
+    r_mes, r_12 = rk(mes, "nocional"), rk(o12, "nocional")
+    tabla_mes = tabla(r_mes, cols, "compacta", f"Operaciones vigentes con fecha de operación en {mes_corto(p)}.")
+    tabla_12 = tabla(r_12, cols, "compacta", f"Originado de {mes_corto(m12[0])} a {mes_corto(p)}, al dólar del cierre "
+                                             "en que se informó; incluye lo que ya venció.")
+
+    comp = (o12.pivot_table(index="mes_origen", columns="instrumento", values="nocional", aggfunc="sum", fill_value=0.0)
+            .reindex(index=m12, fill_value=0.0))
+    fams_c = [f for f in FAMILIAS if f in comp.columns]
+    fig = _fig(320)
+    for f in fams_c:
+        fig.add_bar(x=[mes_corto(m) for m in m12], y=comp[f], name=NOMBRE_FAM[f], marker_color=COLOR_FAM[f],
+                    hovertemplate=f"<b>{NOMBRE_FAM[f]}</b> %{{x}}: %{{y:,.1f}} MM USD<extra></extra>")
+    totales = comp[fams_c].sum(axis=1)
+    fig.add_scatter(x=[mes_corto(m) for m in m12], y=totales, mode="text", text=[num(z, 0) for z in totales],
+                    textposition="top center", textfont=dict(size=11, color=TEXTO), showlegend=False, hoverinfo="skip")
+    fig.update_layout(barmode="stack", legend=dict(traceorder="normal"),
+                      yaxis=dict(title="MM USD de nocional originado", tickformat=",.0f", range=[0, totales.max() * 1.12]))
+    return {"tabla_flujo_mes": tabla_mes, "tabla_flujo_12m": tabla_12, "graf_flujo": html_fig(fig, "g_flujo"),
+            "tot": num(tot, 1), "ops": num(len(mes), 0), "var_prev": pct((tot / prev - 1) * 100, 1, True),
+            "mes_prev": mes_corto(mes_atras(p, 1)), "desde12": mes_corto(m12[0]),
+            "_tot": tot, "_r_mes": r_mes, "_r_12": r_12}
 
 
 def _bbva(d: Datos, g_mes: pd.Series, m12: list[int]) -> dict:
@@ -918,10 +1027,15 @@ def controles(d: Datos, resumen: dict) -> list[str]:
     dif_cam = float((c_res - c_org.reindex(c_res.index)).abs().max())
     vivas_res = d.res.ops_vivas.sum()
     vivas_vig = int((d.vig.mes_origen >= d.res.mes_origen.min()).sum())
+    g_det = d.vig.groupby("grupo").nocional.sum()
+    g_ev = d.evol[d.evol.periodo == p].groupby("grupo").nocional.sum()
+    dif_st = float((g_det - g_ev.reindex(g_det.index).fillna(0.0)).abs().max())
     return [
-        f"Originacion de {mes_corto(p)}: hojas de detalle (operaciones vigentes) {num(a, 2)} MM USD = "
+        f"Stock vigente al {d.corte:%d-%m-%Y}: hojas de detalle {num(g_det.sum(), 2)} MM USD = tbl_evol_deriv_grupo "
+        f"{num(g_ev.sum(), 2)} MM USD; diferencia máxima por grupo {num(dif_st, 4)}.",
+        f"Originación de {mes_corto(p)}: hojas de detalle (operaciones vigentes) {num(a, 2)} MM USD = "
         f"tbl_originacion {num(b, 2)} MM USD (diferencia {num(abs(a - b), 4)}).",
-        f"Originado por camada (tbl_camadas_resumen) = originacion mensual (tbl_originacion): diferencia maxima "
+        f"Originado por camada (tbl_camadas_resumen) = originación mensual (tbl_originacion): diferencia máxima "
         f"{num(dif_cam, 4)} MM USD.",
         f"Operaciones vivas hoy de las camadas {mes_corto(d.res.mes_origen.min())} en adelante: {num(vivas_res, 0)} "
         f"en tbl_camadas_resumen y {num(vivas_vig, 0)} en las hojas de detalle.",
@@ -933,11 +1047,12 @@ def construir(xlsx: Path) -> tuple[str, Datos, dict]:
     d = cargar(xlsx)
     r = seccion_resumen(d)
     ctx = {
-        "titulo": "Derivados de aseguradoras: originacion, participacion y camadas",
+        "titulo": "Derivados de aseguradoras: stock, participación de mercado y camadas",
         "corte": f"{d.corte:%d-%m-%Y}", "mes": mes_corto(d.periodo), "periodo": d.periodo,
         "dolar": num(d.dolar, 2), "dolar_fecha": d.dolar_fecha, "publicacion": d.publicacion,
         "excel": d.excel.name, "generado": f"{_dt.datetime.now():%d-%m-%Y %H:%M}",
-        "resumen": r, "mercado": seccion_mercado(d), "plazos": seccion_plazos(d), "camadas": seccion_camadas(d),
+        "resumen": r, "mercado": seccion_mercado(d), "flujo": seccion_flujo(d), "plazos": seccion_plazos(d),
+        "camadas": seccion_camadas(d),
         "controles": controles(d, r), "plotlyjs": Markup(get_plotlyjs()),
     }
     env = Environment(loader=FileSystemLoader(PLANTILLAS), autoescape=select_autoescape(["html"]))

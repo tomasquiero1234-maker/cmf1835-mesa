@@ -58,9 +58,10 @@ table.tabla tr.resto td { color: var(--gris-texto); font-style: italic; }
 table.tabla tr.ref td { color: var(--gris-texto); background: #FBFBF7; }
 table.mini { font-size: 11px; }
 table.compacta td { padding: 3px 6px; }
+table.num-txt td:not(:first-child), table.num-txt th:not(:first-child) { text-align: right; white-space: nowrap; }
 p.nota-tabla { font-size: 10.5px; color: var(--gris-texto); margin: 3px 0 10px; }
 
-.rejilla { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+.rejilla { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
 .rejilla .caja h4 { margin: 8px 0 3px; font-size: 12.5px; color: var(--azul-oscuro); }
 .rejilla .caja .tot { font-size: 11px; color: var(--gris-texto); font-weight: normal; }
 .dos { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
@@ -103,27 +104,27 @@ ul.hechos li { margin: 4px 0; }
 
 <header class="portada">
   <div class="marca">Mesa de dinero · BBVA Nueva York · Inteligencia competitiva</div>
-  <h1>Derivados de aseguradoras chilenas: originación, participación de mercado y camadas</h1>
-  <div class="sub">Nocional en USD de las operaciones vigentes informadas a la CMF (Circular 1835, anexo B.7). Sin MtM.</div>
+  <h1>Derivados de aseguradoras chilenas: stock vigente, participación de mercado y camadas</h1>
+  <div class="sub">Stock de nocional en USD de las operaciones vigentes informadas a la CMF (Circular 1835, anexo B.7)
+    al {{ corte }}. Sin MtM. El flujo del mes va como complemento en la sección 3.</div>
   <div class="meta">
-    <div>Datos al <b>{{ corte }}</b></div>
-    <div>Mes analizado <b>{{ mes }}</b></div>
+    <div>Stock al <b>{{ corte }}</b></div>
     <div>Dólar observado <b>{{ dolar }}</b> CLP ({{ dolar_fecha }})</div>
     <div>Fuente <b>{{ excel }}</b></div>
   </div>
 </header>
 
 <nav class="indice">
-  <a href="#resumen">1. Resumen ejecutivo</a>
-  <a href="#mercado">2. Participación BBVA</a>
-  <a href="#plazos">3. Plazos y tasas del mes</a>
+  <a href="#resumen">1. Stock al {{ corte }}</a>
+  <a href="#mercado">2. BBVA en el stock</a>
+  <a href="#flujo">3. Flujo de {{ mes }}</a>
   <a href="#camadas">4. Camadas</a>
   <a href="#metodo">5. Metodología</a>
 </nav>
 
 <!-- 1 ------------------------------------------------------------------ -->
 <section id="resumen">
-  <h2>1. Resumen ejecutivo</h2>
+  <h2>1. Resumen ejecutivo: stock vigente al {{ corte }}</h2>
   <div class="kpis">
     {% for k in resumen.kpis %}
     <div class="kpi {{ k.clase or '' }}">
@@ -140,11 +141,11 @@ ul.hechos li { margin: 4px 0; }
   </div>
 
   <div class="bloque">
-    <h3>League table: grupos que más nocional originaron en {{ mes }}, por tipo de derivado</h3>
-    {{ resumen.league }}
+    <h3>Ranking del stock por grupo: top 5 y Grupo BBVA, por tipo de derivado</h3>
+    {{ resumen.ranking }}
   </div>
   <div class="bloque">
-    <h3>Top 5 por instrumento, {{ mes }}</h3>
+    <h3>Top 5 y Grupo BBVA por instrumento, stock al {{ corte }}</h3>
     <div class="rejilla">
       {% for b in resumen.por_instrumento %}
       <div class="caja">
@@ -156,9 +157,8 @@ ul.hechos li { margin: 4px 0; }
   </div>
 
   <div class="bloque">
-    <h3>Composición del volumen originado por instrumento, últimos 12 meses</h3>
-    <p class="bajada">MM USD de nocional por mes de la fecha de operación. Cada mes, lo vigente al cierre en que se
-      informó por primera vez, al dólar de ese cierre. Sombreado: {{ mes }}.</p>
+    <h3>Composición del stock por instrumento, cierre a cierre</h3>
+    <p class="bajada">MM USD de nocional vigente al cierre de cada mes, al dólar de ese cierre. Sombreado: {{ mes }}.</p>
     <div class="grafico">{{ resumen.graf_composicion }}</div>
     {{ resumen.tabla_composicion }}
   </div>
@@ -166,20 +166,26 @@ ul.hechos li { margin: 4px 0; }
 
 <!-- 2 ------------------------------------------------------------------ -->
 <section id="mercado" class="salto">
-  <h2>2. Participación de mercado: Grupo BBVA contra los principales competidores</h2>
+  <h2>2. Participación en el stock: Grupo BBVA contra el top 5</h2>
   <div class="bloque">
-    <h3>Participación en el nocional originado en {{ mes }}</h3>
-    <p class="bajada">Grupo BBVA consolidado (todas sus entidades legales) en azul; top 9 competidores del mes en gris.</p>
-    <div class="grafico">{{ mercado.graf_share_mes }}</div>
+    <h3>Participación en el stock vigente al {{ corte }}</h3>
+    <p class="bajada">Grupo BBVA consolidado (todas sus entidades legales) en azul, con su puesto; top 5 en gris.
+      {{ mercado.resto_txt }}</p>
+    <div class="grafico">{{ mercado.graf_share_stock }}</div>
   </div>
   <div class="bloque">
-    <h3>Mes, trimestre, 12 meses y stock</h3>
-    {{ mercado.tabla_share }}
-  </div>
-  <div class="bloque">
-    <h3>Participación móvil de 3 meses: Grupo BBVA y los 5 mayores competidores de los últimos 12 meses</h3>
-    <p class="bajada">Nocional originado por el grupo en los últimos 3 meses sobre el total originado en esos 3 meses.</p>
+    <h3>Participación en el stock, cierre a cierre: top 5 y Grupo BBVA</h3>
     <div class="grafico">{{ mercado.graf_share_evol }}</div>
+    {{ mercado.tabla_evol_bbva }}
+  </div>
+  <div class="bloque">
+    <h3>Participación en el stock de cada instrumento</h3>
+    {{ mercado.tabla_mat }}
+  </div>
+  <div class="bloque">
+    <h3>Perfil de vencimientos del stock y peso del Grupo BBVA en cada tramo</h3>
+    <p class="bajada">Barras: stock vigente por plazo residual. Línea: participación del Grupo BBVA en cada tramo.</p>
+    <div class="grafico">{{ mercado.graf_vencimientos }}</div>
   </div>
 
   <div class="bloque">
@@ -198,13 +204,26 @@ ul.hechos li { margin: 4px 0; }
 </section>
 
 <!-- 3 ------------------------------------------------------------------ -->
-<section id="plazos" class="salto">
-  <h2>3. Plazos y tasas de la originación de {{ mes }}</h2>
-  <p class="intro">{{ plazos.ops_mes }} operaciones vigentes con fecha de operación en {{ mes }}, {{ plazos.noc_mes }} MM USD.
-    Barras: nocional por tramo de plazo original (de la fecha de operación al vencimiento). Línea: tasa al pactar
-    promedio ponderada por nocional, solo dentro de un mismo instrumento y subyacente. Gráfico para cada combinación
-    con al menos {{ plazos.min_part }}% del volumen del mes y {{ plazos.min_ops }} operaciones; todas en la tabla.</p>
-  {{ plazos.tabla_plazos }}
+<section id="flujo" class="salto">
+  <h2>3. Flujo: originación de {{ mes }} y de los últimos 12 meses</h2>
+  <p class="intro">Complemento del stock: qué se agregó. {{ mes }}: {{ flujo.tot }} MM USD en {{ flujo.ops }}
+    operaciones vigentes con fecha de operación en el mes ({{ flujo.var_prev }} vs {{ flujo.mes_prev }}).</p>
+  <div class="dos">
+    <div class="bloque"><h3>Originación de {{ mes }}: top 5 y Grupo BBVA</h3>{{ flujo.tabla_flujo_mes }}</div>
+    <div class="bloque"><h3>Originación {{ flujo.desde12 }} a {{ mes }}: top 5 y Grupo BBVA</h3>{{ flujo.tabla_flujo_12m }}</div>
+  </div>
+  <div class="bloque">
+    <h3>Originación mensual por instrumento, últimos 12 meses</h3>
+    <div class="grafico">{{ flujo.graf_flujo }}</div>
+  </div>
+  <div class="bloque" id="plazos">
+    <h3>Plazos y tasas de la originación de {{ mes }}</h3>
+    <p class="bajada">Barras: nocional por tramo de plazo original (de la fecha de operación al vencimiento). Línea: tasa al
+      pactar promedio ponderada por nocional, solo dentro de un mismo instrumento y subyacente. Gráfico para cada
+      combinación con al menos {{ plazos.min_part }}% del volumen del mes y {{ plazos.min_ops }} operaciones; todas en
+      la tabla.</p>
+    {{ plazos.tabla_plazos }}
+  </div>
   {% for g in plazos.graficos_plazo %}
   <div class="bloque">
     <h3>{{ g.titulo }}</h3>
@@ -258,8 +277,11 @@ ul.hechos li { margin: 4px 0; }
   <ol>
     <li><b>Fuente única.</b> Este informe lee solo las tablas con nombre (tbl_*) de {{ excel }}: operaciones vigentes
       por instrumento (tbl_ccs, tbl_forward_fx, tbl_forward_uf, tbl_irs, tbl_swap_promesa, tbl_opciones,
-      tbl_futuros), originación mensual (tbl_originacion) y camadas (tbl_camadas_resumen, tbl_camadas). El Excel se
+      tbl_futuros), stock mensual por grupo (tbl_evol_deriv_grupo), originación mensual (tbl_originacion) y camadas (tbl_camadas_resumen, tbl_camadas). El Excel se
       arma desde la CMF, Circular 1835, anexo B.7, publicación {{ publicacion }}.</li>
+    <li><b>Foco en el stock.</b> Las secciones 1 y 2 miden el stock vigente al {{ corte }} (todo lo informado como
+      vigente, cualquiera sea su fecha de operación); el flujo del mes es complemento (sección 3). Todo ranking muestra
+      el top 5 y el Grupo BBVA con su puesto real, esté o no en el top 5.</li>
     <li><b>Métrica.</b> Volúmenes, participaciones y rankings sobre nocional en millones de USD, convertido al dólar
       observado de cierre de cada foto ({{ dolar }} CLP al {{ dolar_fecha }} para {{ mes }}). No se usa el MtM. Los
       pactos (repos) no son derivados y quedan fuera.</li>
