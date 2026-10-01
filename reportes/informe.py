@@ -74,6 +74,9 @@ ANCHO = 1000                       # px: cabe en A4 apaisado con margenes de 10 
 FAMILIAS = ["CCS", "Forward FX", "Forward UF", "Swap UF/CLP", "IRS", "Opcion", "Futuro"]
 NOMBRE_FAM = {"CCS": "CCS", "Forward FX": "Forward FX", "Forward UF": "Forward UF",
               "Swap UF/CLP": "Swap UF/CLP", "IRS": "IRS", "Opcion": "Opciones", "Futuro": "Futuros"}
+#: Abreviaturas para columnas angostas (la tabla de subsidiarias).
+ABREV_FAM = {"CCS": "CCS", "Forward FX": "Fwd FX", "Forward UF": "Fwd UF", "Swap UF/CLP": "Swap UF/CLP",
+             "IRS": "IRS", "Opcion": "Opc.", "Futuro": "Fut."}
 COLOR_FAM = {"CCS": AZUL, "Forward FX": AZUL_MEDIO, "Forward UF": AZUL_CLARO, "Swap UF/CLP": "#2DCCCD",
              "IRS": NARANJA, "Opcion": "#D8BE75", "Futuro": "#8F7AE5"}
 #: Competidores en las lineas de participacion: grises y azul-grises, BBVA en azul.
@@ -681,13 +684,37 @@ def _tabla_evol_bbva(e: pd.DataFrame) -> Markup:
 #  3. stock por contraparte y subsidiaria (entidad legal)
 # ---------------------------------------------------------------------------
 
+def _bloques_por_pagina(t: pd.DataFrame, alto_pagina: float = 500.0) -> list[pd.DataFrame]:
+    """Parte una tabla larga en bloques que caben en una pagina A4 apaisada,
+    cortando solo ANTES de una fila de grupo: ningun grupo queda partido entre
+    paginas y cada bloque se imprime como tabla entera, con su encabezado.
+    El alto de cada fila se estima por las lineas de texto que ocupa."""
+    def alto(r) -> float:
+        lineas = max(1, math.ceil(len(str(r.entidad)) / 40), math.ceil(len(str(r.grupo)) / 16),
+                     math.ceil(len(str(r.inst)) / 26))
+        return 8 + 15 * lineas
+    inicio = [i for i, f in enumerate(t._fila) if f in ("grupo", "grupo-bbva", "total")]
+    grupos = [t.iloc[a:b] for a, b in zip(inicio, inicio[1:] + [len(t)])]
+    bloques, actual, h = [], [], 0.0
+    for g in grupos:
+        hg = sum(alto(r) for r in g.itertuples())
+        if actual and h + hg > alto_pagina:
+            bloques.append(pd.concat(actual))
+            actual, h = [], 0.0
+        actual.append(g)
+        h += hg
+    if actual:
+        bloques.append(pd.concat(actual))
+    return bloques
+
+
 def seccion_contrapartes(d: Datos) -> dict:
     v = d.vig
     stock = v.nocional.sum()
 
     def mezcla(x: pd.DataFrame) -> str:
         g = x.groupby("instrumento").nocional.sum().sort_values(ascending=False)
-        return ", ".join(NOMBRE_FAM.get(f, f) for f in g.index)
+        return ", ".join(ABREV_FAM.get(f, f) for f in g.index)
 
     ent = (v.groupby(["grupo", "entidad_id"])
            .apply(lambda x: pd.Series({"entidad": x.entidad.iloc[0] + (" †" if x.alerta.notna().any() else ""),
@@ -723,16 +750,17 @@ def seccion_contrapartes(d: Datos) -> dict:
                   "pais": "", "id": "", "stock": stock, "s_tot": 100.0, "s_grp": np.nan, "ops": len(v),
                   "aseg": v.aseguradora.nunique(), "inst": "", "_fila": "total"})
     t = pd.DataFrame(filas)
-    tabla_cp = tabla(t, [("#", "rank", "int"), ("Grupo", "grupo", "txt"), ("Entidad legal (subsidiaria)", "entidad", "txt"),
-                         ("País", "pais", "txt"), ("ID legal", "id", "txt"), ("Stock vigente", "stock", "mm"),
-                         ("% del stock", "s_tot", "pct"), ("% del grupo", "s_grp", "pct"), ("Oper.", "ops", "int"),
-                         ("Aseg.", "aseg", "int"), ("Instrumentos", "inst", "txt")], "contrapartes",
-                     f"MM USD de nocional vigente al {d.corte:%d-%m-%Y}. Cada RUT o LEI es una entidad legal; el grupo "
-                     "sale del catálogo de entidades. Instrumentos ordenados por stock. Aseg.: aseguradoras con "
-                     "posición vigente con la entidad o el grupo. †: el identificador que informan las aseguradoras "
-                     "tiene alertas (LEI de un fondo o fideicomiso, LEI de otra entidad, LEI no vigente o sin RUT ni "
-                     "LEI): la entidad legal puede no ser la que dice el nombre. Detalle en la hoja "
-                     "Calidad_Contrapartes del Excel.")
+    cols_cp = [("#", "rank", "int"), ("Grupo", "grupo", "txt"), ("Entidad legal (subsidiaria)", "entidad", "txt"),
+               ("País", "pais", "txt"), ("ID legal", "id", "txt"), ("Stock vigente", "stock", "mm"),
+               ("% del stock", "s_tot", "pct"), ("% del grupo", "s_grp", "pct"), ("Oper.", "ops", "int"),
+               ("Aseg.", "aseg", "int"), ("Instrumentos", "inst", "txt")]
+    nota_cp = (f"MM USD de nocional vigente al {d.corte:%d-%m-%Y}. Cada RUT o LEI es una entidad legal; el grupo "
+               "sale del catálogo de entidades. Instrumentos ordenados por stock (Fwd: forward; Opc.: opciones; "
+               "Fut.: futuros). Aseg.: aseguradoras con posición vigente con la entidad o el grupo. †: el "
+               "identificador que informan las aseguradoras tiene alertas (LEI de un fondo o fideicomiso, LEI de "
+               "otra entidad, LEI no vigente o sin RUT ni LEI): la entidad legal puede no ser la que dice el nombre. "
+               "Detalle en la hoja Calidad_Contrapartes del Excel.")
+    tablas_cp = [tabla(b, cols_cp, "contrapartes") for b in _bloques_por_pagina(t)]
 
     # treemap grupo -> entidad legal
     ids, labels, parents, values, colores = [], [], [], [], []
@@ -754,7 +782,7 @@ def seccion_contrapartes(d: Datos) -> dict:
                              tiling=dict(pad=2), pathbar=dict(visible=False), sort=True))
     fig.update_layout(margin=dict(l=0, r=0, t=0, b=0), uniformtext=dict(minsize=8, mode="hide"))
     multi = grp[grp.n_ent > 1]
-    return {"tabla_cp": tabla_cp, "graf_cp": html_fig(fig, "g_contrapartes"), "n_grupos": len(grp),
+    return {"tablas_cp": tablas_cp, "nota_cp": nota_cp, "graf_cp": html_fig(fig, "g_contrapartes"), "n_grupos": len(grp),
             "n_ent": ent.entidad_id.nunique(), "n_multi": len(multi),
             "multi_txt": "; ".join(f"{g} ({int(r.n_ent)})" for g, r in multi.iterrows()), "_tabla": t}
 

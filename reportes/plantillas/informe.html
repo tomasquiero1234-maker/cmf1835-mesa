@@ -62,6 +62,7 @@ table.tabla tr.grupo td { font-weight: 700; background: #EEF2F6; border-top: 1px
 table.tabla tr.grupo-bbva td { font-weight: 700; background: #E3F0FB; color: var(--azul); border-top: 1px solid #C9D1DA; }
 table.tabla tr.sub td:nth-child(3) { padding-left: 16px; }
 table.tabla tr.sub td { color: #44515E; }
+table.contrapartes td:nth-child(5) { white-space: nowrap; }
 table.mini { font-size: 11px; }
 table.compacta td { padding: 3px 6px; }
 table.num-txt td:not(:first-child), table.num-txt th:not(:first-child) { text-align: right; white-space: nowrap; }
@@ -94,8 +95,6 @@ ul.hechos li { margin: 4px 0; }
   nav.indice { display: none; }
   .salto { break-before: page; }
   .bloque, .grafico, .kpis, .lectura, .rejilla, .dos, table.tabla, h3 { break-inside: avoid; }
-  table.tabla.contrapartes { break-inside: auto; }
-  table.tabla.contrapartes tr { break-inside: avoid; }
   table.tabla thead { display: table-header-group; }
   h2, h3 { break-after: avoid; }
   body { font-size: 12px; }
@@ -229,9 +228,10 @@ ul.hechos li { margin: 4px 0; }
   <div class="bloque">
     <div class="grafico">{{ contrapartes.graf_cp }}</div>
   </div>
-  <div class="bloque-largo">
-    {{ contrapartes.tabla_cp }}
-  </div>
+  {% for t in contrapartes.tablas_cp %}
+  <div class="bloque">{{ t }}</div>
+  {% endfor %}
+  <p class="nota-tabla">{{ contrapartes.nota_cp }}</p>
 </section>
 
 <!-- 3 ------------------------------------------------------------------ -->
