@@ -56,6 +56,12 @@ table.tabla tr.bbva td { background: #E3F0FB; font-weight: 700; color: var(--azu
 table.tabla tr.total td { background: var(--suave); font-weight: 700; border-top: 2px solid var(--azul); }
 table.tabla tr.resto td { color: var(--gris-texto); font-style: italic; }
 table.tabla tr.ref td { color: var(--gris-texto); background: #FBFBF7; }
+table.tabla tr.sin-bbva td { color: #44515E; background: #F1F3F5; }
+table.tabla tr.bbva-suave td { background: #EAF3FB; }
+table.tabla tr.grupo td { font-weight: 700; background: #EEF2F6; border-top: 1px solid #C9D1DA; }
+table.tabla tr.grupo-bbva td { font-weight: 700; background: #E3F0FB; color: var(--azul); border-top: 1px solid #C9D1DA; }
+table.tabla tr.sub td:nth-child(3) { padding-left: 16px; }
+table.tabla tr.sub td { color: #44515E; }
 table.mini { font-size: 11px; }
 table.compacta td { padding: 3px 6px; }
 table.num-txt td:not(:first-child), table.num-txt th:not(:first-child) { text-align: right; white-space: nowrap; }
@@ -88,6 +94,9 @@ ul.hechos li { margin: 4px 0; }
   nav.indice { display: none; }
   .salto { break-before: page; }
   .bloque, .grafico, .kpis, .lectura, .rejilla, .dos, table.tabla, h3 { break-inside: avoid; }
+  table.tabla.contrapartes { break-inside: auto; }
+  table.tabla.contrapartes tr { break-inside: avoid; }
+  table.tabla thead { display: table-header-group; }
   h2, h3 { break-after: avoid; }
   body { font-size: 12px; }
   h2 { margin: 4px 0 8px; }
@@ -117,9 +126,10 @@ ul.hechos li { margin: 4px 0; }
 <nav class="indice">
   <a href="#resumen">1. Stock al {{ corte }}</a>
   <a href="#mercado">2. BBVA en el stock</a>
-  <a href="#flujo">3. Flujo de {{ mes }}</a>
-  <a href="#camadas">4. Camadas</a>
-  <a href="#metodo">5. Metodología</a>
+  <a href="#contrapartes">3. Contrapartes y subsidiarias</a>
+  <a href="#flujo">4. Flujo de {{ mes }}</a>
+  <a href="#camadas">5. Camadas</a>
+  <a href="#metodo">6. Metodología</a>
 </nav>
 
 <!-- 1 ------------------------------------------------------------------ -->
@@ -197,15 +207,36 @@ ul.hechos li { margin: 4px 0; }
     <h3>Grupo BBVA por instrumento y subyacente</h3>
     {{ mercado.tabla_bbva_inst }}
   </div>
+</section>
+
+<section id="aseguradoras" class="salto">
+  <h2>Stock de todas las aseguradoras: dónde está y dónde no está el Grupo BBVA</h2>
+  <ul class="hechos">{% for h in mercado.hechos_aseg %}<li>{{ h }}</li>{% endfor %}</ul>
   <div class="bloque">
-    <h3>Grupo BBVA por aseguradora (stock vigente)</h3>
-    {{ mercado.tabla_bbva_cli }}
+    <div class="grafico">{{ mercado.graf_aseg }}</div>
+  </div>
+  <div class="bloque">
+    {{ mercado.tabla_aseg }}
+  </div>
+</section>
+
+<!-- 3 ------------------------------------------------------------------ -->
+<section id="contrapartes" class="salto">
+  <h2>3. Stock por contraparte y por subsidiaria</h2>
+  <p class="intro">{{ contrapartes.n_grupos }} grupos y {{ contrapartes.n_ent }} entidades legales (subsidiarias) con
+    derivados vigentes. Grupos con más de una entidad legal: {{ contrapartes.multi_txt }}. Cada caja es una entidad
+    legal dentro de su grupo; el Grupo BBVA en azul.</p>
+  <div class="bloque">
+    <div class="grafico">{{ contrapartes.graf_cp }}</div>
+  </div>
+  <div class="bloque-largo">
+    {{ contrapartes.tabla_cp }}
   </div>
 </section>
 
 <!-- 3 ------------------------------------------------------------------ -->
 <section id="flujo" class="salto">
-  <h2>3. Flujo: originación de {{ mes }} y de los últimos 12 meses</h2>
+  <h2>4. Flujo: originación de {{ mes }} y de los últimos 12 meses</h2>
   <p class="intro">Complemento del stock: qué se agregó. {{ mes }}: {{ flujo.tot }} MM USD en {{ flujo.ops }}
     operaciones vigentes con fecha de operación en el mes ({{ flujo.var_prev }} vs {{ flujo.mes_prev }}).</p>
   <div class="dos">
@@ -235,12 +266,11 @@ ul.hechos li { margin: 4px 0; }
 
 <!-- 4 ------------------------------------------------------------------ -->
 <section id="camadas" class="salto">
-  <h2>4. Camadas: cuánto se originó cada mes, a qué tasa y cuánto sigue vivo</h2>
+  <h2>5. Camadas: cuánto se originó cada mes, a qué tasa y cuánto sigue vivo</h2>
   <p class="intro">Cada operación se sigue por las fotos mensuales del B.7 desde {{ camadas.desde }}. Desde entonces se
     originaron <b>{{ camadas.orig_tot }} MM USD</b> en {{ camadas.n_camadas }} camadas mensuales; siguen vivos
     <b>{{ camadas.vivo_tot }} MM USD ({{ camadas.pct_tot }})</b>. El nocional de cada operación queda fijo en el de su
     primera foto: la supervivencia mide vencimientos y deshaces, no tipo de cambio.</p>
-  {{ camadas.tabla_camadas_fam }}
   {% for b in camadas.bloques %}
   <div class="bloque">
     <h3>{{ b.titulo }}: originado por camada, vivo hoy y tasa al pactar</h3>
@@ -273,14 +303,19 @@ ul.hechos li { margin: 4px 0; }
 
 <!-- 5 ------------------------------------------------------------------ -->
 <section id="metodo" class="salto metodo">
-  <h2>5. Metodología, alcance y controles</h2>
+  <h2>6. Metodología, alcance y controles</h2>
   <ol>
     <li><b>Fuente única.</b> Este informe lee solo las tablas con nombre (tbl_*) de {{ excel }}: operaciones vigentes
-      por instrumento (tbl_ccs, tbl_forward_fx, tbl_forward_uf, tbl_irs, tbl_swap_promesa, tbl_opciones,
+      por instrumento (tbl_ccs, tbl_forward_fx, tbl_forward_uf, tbl_irs, tbl_swap_uf_clp, tbl_opciones,
       tbl_futuros), stock mensual por grupo (tbl_evol_deriv_grupo), originación mensual (tbl_originacion) y camadas (tbl_camadas_resumen, tbl_camadas). El Excel se
       arma desde la CMF, Circular 1835, anexo B.7, publicación {{ publicacion }}.</li>
+    <li><b>Instrumentos.</b> CCS: swap con al menos una moneda extranjera (UF/USD, UF/EUR, UF/GBP, USD/CLP).
+      Swap UF/CLP: swap de UF contra pesos, con tasa fija en UF contra Cámara (ICP) o contra pesos fijos; calza
+      inflación y duración. La CMF lo codifica como "tasa o inflación" o como "moneda", y versiones anteriores de este
+      informe lo llamaban "swap promesa". IRS: swap de tasa en una sola moneda (pesos fijos contra Cámara, o USD fijo
+      contra SOFR). Forward FX: divisa contra pesos. Forward UF: UF contra pesos.</li>
     <li><b>Foco en el stock.</b> Las secciones 1 y 2 miden el stock vigente al {{ corte }} (todo lo informado como
-      vigente, cualquiera sea su fecha de operación); el flujo del mes es complemento (sección 3). Todo ranking muestra
+      vigente, cualquiera sea su fecha de operación); el flujo del mes es complemento (sección 4). Todo ranking muestra
       el top 5 y el Grupo BBVA con su puesto real, esté o no en el top 5.</li>
     <li><b>Métrica.</b> Volúmenes, participaciones y rankings sobre nocional en millones de USD, convertido al dólar
       observado de cierre de cada foto ({{ dolar }} CLP al {{ dolar_fecha }} para {{ mes }}). No se usa el MtM. Los
@@ -295,14 +330,13 @@ ul.hechos li { margin: 4px 0; }
       en pb (UF contra USD en un UF/USD). En los CCS UF/USD conviven dos convenciones de reporte (tasa por pata, p.ej.
       UF 3,49% contra USD 6,14%, y pata USD plana en 0% con UF negativa): la tasa de una pata sola no es comparable,
       el diferencial sí. Forward de moneda: tipo de cambio pactado. Forward UF: inflación implícita contra la UF del
-      día de la operación, anualizada (bajo 3 meses la domina el IPC ya conocido del mes). Swap promesa: inflación
+      día de la operación, anualizada (bajo 3 meses la domina el IPC ya conocido del mes). Swap UF/CLP: inflación
       breakeven. IRS: tasa fija. Opciones y futuros: sin tasa comparable.</li>
     <li><b>Camadas.</b> Mes de origen = fecha de operación. Nocional originado = el de la primera foto, al dólar de
       ese cierre; queda fijo, así que la curva no capta amortizaciones parciales. Viva = sigue informada en la foto.
       Solo camadas desde {{ camadas.desde }}: antes no se observa el volumen inicial. Tasa "de lo vivo": misma métrica,
       solo sobre las operaciones que siguen vigentes. Supervivencia encadenada: producto de los factores mensuales
-      vivo(k)/vivo(k−1) entre las camadas que tienen el mes k observado (tipo Kaplan-Meier); la vida mediana es el
-      primer mes en que baja de 50%, y no se informa con menos de {{ camadas.min_ops }} operaciones.</li>
+      vivo(k)/vivo(k−1) entre las camadas que tienen el mes k observado (tipo Kaplan-Meier).</li>
     <li><b>Límites.</b> Una sucursal comparte el LEI de su casa matriz: BBVA Nueva York y BBVA Madrid no se pueden
       separar con datos CMF. Algunos instrumentos tienen poco flujo mensual (ver la tabla de plazos): un promedio
       con pocas operaciones es un dato puntual, no una curva de mercado.</li>

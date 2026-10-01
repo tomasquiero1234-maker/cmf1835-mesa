@@ -117,7 +117,7 @@ def main() -> int:
           f"no la suma de todas ({total_todas / 1e6:,.1f})")
 
     print("\n[4] coherencia entre hojas de derivados")
-    fams = {"CCS": "tbl_ccs", "Swap_Promesa": "tbl_swap_promesa", "Forward_FX": "tbl_forward_fx",
+    fams = {"CCS": "tbl_ccs", "Swap_UF_CLP": "tbl_swap_uf_clp", "Forward_FX": "tbl_forward_fx",
             "Forward_UF": "tbl_forward_uf", "IRS": "tbl_irs", "Opciones": "tbl_opciones", "Futuros": "tbl_futuros"}
     por_inst = sum(pd.to_numeric(leer_tabla(wb, h, t)["Nocional (MM USD)"], errors="coerce").sum()
                    for h, t in fams.items())
@@ -261,6 +261,10 @@ def main() -> int:
     uf = pd.Series(np.where(ccs["Moneda recibe"] == "UF", tl, tc), index=ccs.index)
     check(plana.sum() > 0 and (dif[plana] - uf[plana] * 100).abs().max() < 1e-9,
           f"CCS UF/USD con pata USD plana ({int(plana.sum())}): el diferencial es exactamente la tasa UF")
+
+    sw = leer_tabla(wb, "Swap_UF_CLP", "tbl_swap_uf_clp")
+    check(set(sw.Cruce) == {"UF/CLP"} and "UF/CLP" not in set(ccs.Cruce),
+          f"Swap_UF_CLP: solo UF contra pesos ({len(sw)} oper.); CCS: solo cruces con moneda extranjera")
 
     print("\n[8] el dashboard no se toco")
     diff = subprocess.run(["git", "diff", "--quiet", "HEAD", "--", "app/dashboard.py"], cwd=ROOT)

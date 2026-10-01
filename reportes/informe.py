@@ -28,6 +28,7 @@ import html
 import math
 import os
 import posixpath
+import re
 import shutil
 import signal
 import subprocess
@@ -70,10 +71,10 @@ TEXTO = "#1F2D3D"
 FUENTE = "Helvetica Neue, Helvetica, Arial, sans-serif"
 ANCHO = 1000                       # px: cabe en A4 apaisado con margenes de 10 mm
 
-FAMILIAS = ["CCS", "Forward FX", "Forward UF", "Swap Promesa", "IRS", "Opcion", "Futuro"]
+FAMILIAS = ["CCS", "Forward FX", "Forward UF", "Swap UF/CLP", "IRS", "Opcion", "Futuro"]
 NOMBRE_FAM = {"CCS": "CCS", "Forward FX": "Forward FX", "Forward UF": "Forward UF",
-              "Swap Promesa": "Swap promesa", "IRS": "IRS", "Opcion": "Opciones", "Futuro": "Futuros"}
-COLOR_FAM = {"CCS": AZUL, "Forward FX": AZUL_MEDIO, "Forward UF": AZUL_CLARO, "Swap Promesa": "#2DCCCD",
+              "Swap UF/CLP": "Swap UF/CLP", "IRS": "IRS", "Opcion": "Opciones", "Futuro": "Futuros"}
+COLOR_FAM = {"CCS": AZUL, "Forward FX": AZUL_MEDIO, "Forward UF": AZUL_CLARO, "Swap UF/CLP": "#2DCCCD",
              "IRS": NARANJA, "Opcion": "#D8BE75", "Futuro": "#8F7AE5"}
 #: Competidores en las lineas de participacion: grises y azul-grises, BBVA en azul.
 COLOR_COMP = ["#3E4A57", "#A07F4F", "#3A9A9A", "#8C7AB8", "#8A96A3"]
@@ -82,7 +83,7 @@ COLOR_COMP = ["#3E4A57", "#A07F4F", "#3A9A9A", "#8C7AB8", "#8A96A3"]
 #: columna de la tasa al pactar (None si el instrumento no tiene una comparable).
 TABLAS_DERIV = {
     "CCS": ("tbl_ccs", "Cruce", "Diferencial compuesto moneda 1 vs 2 (pb)"),
-    "Swap Promesa": ("tbl_swap_promesa", "Cruce", "Inflacion breakeven (%)"),
+    "Swap UF/CLP": ("tbl_swap_uf_clp", "Cruce", "Inflacion breakeven (%)"),
     "Forward FX": ("tbl_forward_fx", "Par", "Precio pactado"),
     "Forward UF": ("tbl_forward_uf", "Par", "Inflacion implicita al pactar (% anual)"),
     "IRS": ("tbl_irs", "Subyacente", "Tasa fija (%)"),
@@ -115,6 +116,41 @@ def num(x, dec: int = 1, signo: bool = False) -> str:
         return "–"
     s = f"{x:+,.{dec}f}" if signo else f"{x:,.{dec}f}"
     return s.replace(",", "\x00").replace(".", ",").replace("\x00", ".")
+
+
+_SIGLAS = {"CN", "BICE", "ZSLI", "BCI", "BBVA", "HSBC", "BNP", "SMBC", "PLC", "LLC", "USA", "UK", "JP", "BTG",
+           "NMTC", "AG", "N.A", "N.A.", "S.A.S.", "II"}
+_MENORES = {"DE", "DEL", "LA", "Y", "OF", "THE"}
+
+
+def _titulo(nombre: str) -> str:
+    """'BANK OF NOVA SCOTIA' -> 'Bank of Nova Scotia'; respeta siglas. Solo
+    toca nombres escritos enteros en mayusculas."""
+    if nombre != nombre.upper():
+        return nombre
+    pal = nombre.split()
+    return " ".join(w if w in _SIGLAS else (w.lower() if (w in _MENORES and i) else w.capitalize())
+                    for i, w in enumerate(pal))
+
+
+def corto_aseguradora(nombre: str) -> str:
+    """Nombre corto de una aseguradora para tablas y graficos:
+    'COMPANIA SEGUROS CONFUTURO S.A.' -> 'Confuturo'."""
+    s = re.sub(r"\s+", " ", str(nombre).upper().replace("BCIVIDA", "BCI VIDA")).strip()
+    for frase in (r"COMPA(Ñ|N)IA DE SEGUROS DE VIDA", r"COMPA(Ñ|N)IA SEGUROS", r"CIA\.? SEGUROS",
+                  r"SEGUROS DE VIDA(?= |$)", r"SEGUROS VIDA", r"S\. ?A\.?$"):
+        s = re.sub(frase, " ", s).strip()
+    s = re.sub(r"\s+(DE|DEL)$", "", re.sub(r"\s+", " ", s)).strip(" .,")
+    if s in ("LIFE", ""):
+        s = {"LIFE": "LIFE SEGUROS"}.get(s, str(nombre))
+    return _titulo(s)
+
+
+def corto_entidad(nombre: str) -> str:
+    """Nombre legal acortado para etiquetas: sin 'Sociedad Anonima' y en titulo."""
+    s = re.sub(r"\s+(SOCIEDAD ANONIMA|S\.A\.)$", "", str(nombre).strip())
+    s = s.replace("AKTIENGESELLSCHAFT", "AG")
+    return _titulo(s)
 
 
 def pct(x, dec: int = 1, signo: bool = False) -> str:
@@ -222,6 +258,7 @@ def cargar(xlsx: Path) -> Datos:
             "fecha_vencimiento": pd.to_datetime(d["Fecha vencimiento"]),
             "plazo_dias": pd.to_numeric(d["Plazo original (dias)"], errors="coerce"),
             "tasa": pd.to_numeric(d[col_tasa], errors="coerce") if col_tasa else np.nan,
+            "alerta": d["Alerta contraparte"].where(d["Alerta contraparte"].astype(str).str.strip() != ""),
         }))
     vig = pd.concat(partes, ignore_index=True)
     vig["mes_origen"] = vig.fecha_operacion.dt.year * 100 + vig.fecha_operacion.dt.month
@@ -325,7 +362,7 @@ def metrica(fam: str, sub: str) -> tuple[str, str, str, str] | None:
         return f"Tipo de cambio forward pactado (CLP por {div})", ",.1f", "", f"CLP por {div} pactado"
     if fam == "Forward UF":
         return "Inflación implícita al pactar (% anual)", ".2f", "%", "Inflación implícita (%)"
-    if fam == "Swap Promesa":
+    if fam == "Swap UF/CLP":
         return "Inflación breakeven al pactar (%)", ".2f", "%", "Breakeven (%)"
     if fam == "IRS":
         return "Tasa fija pactada (%)", ".2f", "%", "Tasa fija (%)"
@@ -516,6 +553,10 @@ def seccion_resumen(d: Datos) -> dict:
         + ". Por instrumento: " + "; ".join(f"{NOMBRE_FAM[f]} {pct(sh)}, puesto {r_} de {n_}" for f, sh, r_, n_ in b_inst)
         + ".",
         "Mezcla del stock: " + ", ".join(f"{NOMBRE_FAM[f]} {pct(x / stock * 100)}" for f, x in fam_st.items()) + ".",
+        f"Aseguradoras: {v.aseguradora.nunique()} tienen derivados vigentes y el Grupo BBVA está en "
+        f"{v[v.grupo == GRUPO_BBVA].aseguradora.nunique()}; las que no operan con BBVA suman "
+        f"{num(v[~v.aseguradora.isin(set(v[v.grupo == GRUPO_BBVA].aseguradora))].nocional.sum(), 1)} MM USD "
+        "(detalle en la sección 2).",
         f"Flujo de {mes_corto(p)} (sección 3): {num(mes.nocional.sum(), 1)} MM USD originados; Grupo BBVA "
         f"{num(mes[mes.grupo == GRUPO_BBVA].nocional.sum(), 1)}"
         + (f" (su operación vigente más reciente es del {ult_bbva:%d-%m-%Y})." if not pd.isna(ult_bbva) else "."),
@@ -637,6 +678,88 @@ def _tabla_evol_bbva(e: pd.DataFrame) -> Markup:
 
 
 # ---------------------------------------------------------------------------
+#  3. stock por contraparte y subsidiaria (entidad legal)
+# ---------------------------------------------------------------------------
+
+def seccion_contrapartes(d: Datos) -> dict:
+    v = d.vig
+    stock = v.nocional.sum()
+
+    def mezcla(x: pd.DataFrame) -> str:
+        g = x.groupby("instrumento").nocional.sum().sort_values(ascending=False)
+        return ", ".join(NOMBRE_FAM.get(f, f) for f in g.index)
+
+    ent = (v.groupby(["grupo", "entidad_id"])
+           .apply(lambda x: pd.Series({"entidad": x.entidad.iloc[0] + (" †" if x.alerta.notna().any() else ""),
+                                       "pais": x.pais.dropna().iloc[0]
+                                       if x.pais.notna().any() else "–",
+                                       "stock": x.nocional.sum(), "ops": len(x), "aseg": x.aseguradora.nunique(),
+                                       "inst": mezcla(x)}), include_groups=False)
+           .reset_index())
+    grp = (v.groupby("grupo").apply(lambda x: pd.Series({"stock": x.nocional.sum(), "ops": len(x),
+                                                         "aseg": x.aseguradora.nunique(),
+                                                         "n_ent": x.entidad_id.nunique(), "inst": mezcla(x)}),
+                                    include_groups=False)
+           .sort_values("stock", ascending=False))
+    grp["rank"] = np.arange(1, len(grp) + 1)
+    filas = []
+    for g, r in grp.iterrows():
+        e = ent[ent.grupo == g].sort_values("stock", ascending=False)
+        es_b = g == GRUPO_BBVA
+        if len(e) == 1:
+            x = e.iloc[0]
+            filas.append({"rank": r["rank"], "grupo": g, "entidad": x.entidad, "pais": x.pais, "id": x.entidad_id,
+                          "stock": x.stock, "s_tot": x.stock / stock * 100, "s_grp": 100.0, "ops": x.ops,
+                          "aseg": x.aseg, "inst": x.inst, "_fila": "grupo-bbva" if es_b else "grupo"})
+            continue
+        filas.append({"rank": r["rank"], "grupo": g, "entidad": f"{int(r.n_ent)} entidades legales", "pais": "",
+                      "id": "", "stock": r.stock, "s_tot": r.stock / stock * 100, "s_grp": 100.0, "ops": r.ops,
+                      "aseg": r.aseg, "inst": r.inst, "_fila": "grupo-bbva" if es_b else "grupo"})
+        for x in e.itertuples():
+            filas.append({"rank": np.nan, "grupo": "", "entidad": x.entidad, "pais": x.pais, "id": x.entidad_id,
+                          "stock": x.stock, "s_tot": x.stock / stock * 100, "s_grp": x.stock / r.stock * 100,
+                          "ops": x.ops, "aseg": x.aseg, "inst": x.inst, "_fila": "sub"})
+    filas.append({"rank": np.nan, "grupo": "Total", "entidad": f"{ent.entidad_id.nunique()} entidades legales",
+                  "pais": "", "id": "", "stock": stock, "s_tot": 100.0, "s_grp": np.nan, "ops": len(v),
+                  "aseg": v.aseguradora.nunique(), "inst": "", "_fila": "total"})
+    t = pd.DataFrame(filas)
+    tabla_cp = tabla(t, [("#", "rank", "int"), ("Grupo", "grupo", "txt"), ("Entidad legal (subsidiaria)", "entidad", "txt"),
+                         ("País", "pais", "txt"), ("ID legal", "id", "txt"), ("Stock vigente", "stock", "mm"),
+                         ("% del stock", "s_tot", "pct"), ("% del grupo", "s_grp", "pct"), ("Oper.", "ops", "int"),
+                         ("Aseg.", "aseg", "int"), ("Instrumentos", "inst", "txt")], "contrapartes",
+                     f"MM USD de nocional vigente al {d.corte:%d-%m-%Y}. Cada RUT o LEI es una entidad legal; el grupo "
+                     "sale del catálogo de entidades. Instrumentos ordenados por stock. Aseg.: aseguradoras con "
+                     "posición vigente con la entidad o el grupo. †: el identificador que informan las aseguradoras "
+                     "tiene alertas (LEI de un fondo o fideicomiso, LEI de otra entidad, LEI no vigente o sin RUT ni "
+                     "LEI): la entidad legal puede no ser la que dice el nombre. Detalle en la hoja "
+                     "Calidad_Contrapartes del Excel.")
+
+    # treemap grupo -> entidad legal
+    ids, labels, parents, values, colores = [], [], [], [], []
+    for i, (g, r) in enumerate(grp.iterrows()):
+        es_b = g == GRUPO_BBVA
+        ids.append(f"g:{g}"); labels.append(g); parents.append(""); values.append(r.stock)
+        colores.append(AZUL_MEDIO if es_b else ("#9AA5B1" if i % 2 else "#B7C0CA"))
+        for x in ent[ent.grupo == g].itertuples():
+            ids.append(f"e:{x.entidad_id}"); labels.append(corto_entidad(x.entidad.replace(" †", "")))
+            parents.append(f"g:{g}")
+            values.append(x.stock)
+            colores.append(AZUL_CLARO if es_b else ("#C9D1DA" if i % 2 else "#DCE2E8"))
+    fig = _fig(470)
+    fig.add_trace(go.Treemap(ids=ids, labels=labels, parents=parents, values=values, branchvalues="total",
+                             marker=dict(colors=colores, line=dict(color="white", width=1.5)),
+                             texttemplate="<b>%{label}</b><br>%{value:,.0f} MM USD · %{percentRoot:.1%}",
+                             hovertemplate="<b>%{label}</b><br>%{value:,.1f} MM USD<br>%{percentRoot:.1%} del stock"
+                                           "<br>%{percentParent:.1%} de %{parent}<extra></extra>",
+                             tiling=dict(pad=2), pathbar=dict(visible=False), sort=True))
+    fig.update_layout(margin=dict(l=0, r=0, t=0, b=0), uniformtext=dict(minsize=8, mode="hide"))
+    multi = grp[grp.n_ent > 1]
+    return {"tabla_cp": tabla_cp, "graf_cp": html_fig(fig, "g_contrapartes"), "n_grupos": len(grp),
+            "n_ent": ent.entidad_id.nunique(), "n_multi": len(multi),
+            "multi_txt": "; ".join(f"{g} ({int(r.n_ent)})" for g, r in multi.iterrows()), "_tabla": t}
+
+
+# ---------------------------------------------------------------------------
 #  3. flujo: originacion del mes y de 12 meses (complemento del stock)
 # ---------------------------------------------------------------------------
 
@@ -727,17 +850,6 @@ def _bbva(d: Datos, g_mes: pd.Series, m12: list[int]) -> dict:
                               ("Part. BBVA en el stock del subyacente", "s_stock", "pct"),
                               ("Originado 12M", "m12", "mm"), ("Última oper. vigente", "ultima", "fecha")],
                        "compacta", "MM USD de nocional. Originado 12M incluye operaciones que ya vencieron.")
-    cli = (b.groupby("aseguradora").agg(stock=("nocional", "sum"), ops=("nocional", "size"),
-                                        inst=("instrumento", lambda x: ", ".join(NOMBRE_FAM[f] for f in FAMILIAS
-                                                                                if f in set(x))),
-                                        ultima=("fecha_operacion", "max"))
-           .sort_values("stock", ascending=False).reset_index())
-    cli["share"] = cli.stock / b.nocional.sum() * 100
-    tabla_cli = tabla(cli, [("Aseguradora", "aseguradora", "txt"), ("Stock vigente con BBVA", "stock", "mm"),
-                            ("% del stock BBVA", "share", "pct"), ("Oper. vivas", "ops", "int"),
-                            ("Instrumentos", "inst", "txt"), ("Última oper.", "ultima", "fecha")],
-                      "compacta", "MM USD de nocional.")
-
     en_grupo, refs = ent[ent._fila == "bbva"], ent[ent._fila == "ref"]
     hechos = []
     if len(en_grupo) == 1:
@@ -759,8 +871,70 @@ def _bbva(d: Datos, g_mes: pd.Series, m12: list[int]) -> dict:
         meses_sin = (p // 100 * 12 + p % 100) - (ult.year * 12 + ult.month)
         hechos.append(f"Sin originación en {mes_corto(p)}: la operación vigente más reciente del grupo es del "
                       f"{ult:%d-%m-%Y}, {meses_sin} meses antes del corte.")
-    return {"tabla_bbva_ent": tabla_ent, "tabla_bbva_inst": tabla_inst, "tabla_bbva_cli": tabla_cli,
-            "hechos_bbva": hechos}
+    return {"tabla_bbva_ent": tabla_ent, "tabla_bbva_inst": tabla_inst, "hechos_bbva": hechos,
+            **_aseguradoras(d)}
+
+
+def _aseguradoras(d: Datos) -> dict:
+    """Stock de TODAS las aseguradoras con derivados: cuanto tienen, cuanto
+    esta con el Grupo BBVA y cuanto con otros bancos."""
+    v = d.vig.assign(aseguradora=d.vig.aseguradora.map(corto_aseguradora))
+    fams = [f for f in FAMILIAS if f in set(v.instrumento)]
+    principales = [f for f in ["CCS", "Forward FX", "Swap UF/CLP", "Forward UF", "IRS"] if f in fams]
+    t = v.pivot_table(index="aseguradora", columns="instrumento", values="nocional", aggfunc="sum", fill_value=0.0)
+    t["Otros"] = t[[f for f in fams if f not in principales]].sum(axis=1) if len(fams) > len(principales) else 0.0
+    t = t[principales + ["Otros"]]
+    t.insert(0, "total", t.sum(axis=1))
+    t["bbva"] = v[v.grupo == GRUPO_BBVA].groupby("aseguradora").nocional.sum().reindex(t.index).fillna(0.0)
+    t["s_bbva"] = t.bbva / t.total * 100
+    t["otros_bancos"] = t.total - t.bbva
+    t["grupos"] = v.groupby("aseguradora").grupo.nunique()
+    pg = v.groupby(["aseguradora", "grupo"]).nocional.sum().reset_index().sort_values("nocional", ascending=False)
+    lider = pg.drop_duplicates("aseguradora").set_index("aseguradora")
+    t["lider"] = [f"{re.sub(r'^Grupo ', '', lider.grupo[a])} ({pct(lider.nocional[a] / t.total[a] * 100, 0)})"
+                  for a in t.index]
+    t = t.sort_values("total", ascending=False).reset_index()
+    t["rank"] = np.arange(1, len(t) + 1)
+    t["con_bbva"] = np.where(t.bbva > 0, "Sí", "No")
+    t["_fila"] = np.where(t.bbva > 0, "bbva-suave", "sin-bbva")
+    tot = {"aseguradora": "Total", "rank": np.nan, "con_bbva": "", "lider": "", "grupos": v.grupo.nunique(),
+           "_fila": "total", **{c: t[c].sum() for c in ["total"] + principales + ["Otros", "bbva", "otros_bancos"]}}
+    tot["s_bbva"] = tot["bbva"] / tot["total"] * 100
+    tt = pd.concat([t, pd.DataFrame([tot])], ignore_index=True)
+    tabla_aseg = tabla(tt, [("#", "rank", "int"), ("Aseguradora", "aseguradora", "txt"), ("Stock total", "total", "mm")]
+                       + [(NOMBRE_FAM[f], f, "mm") for f in principales] + [("Otros", "Otros", "mm")]
+                       + [("Con BBVA", "bbva", "mm"), ("% BBVA", "s_bbva", "pct"),
+                          ("Con otros bancos", "otros_bancos", "mm"), ("Principal contraparte", "lider", "txt"),
+                          ("Grupos", "grupos", "int")], "aseg",
+                       f"MM USD de nocional vigente al {d.corte:%d-%m-%Y}. Stock con otros bancos = stock total menos "
+                       "lo que la aseguradora tiene con el Grupo BBVA. Principal contraparte: grupo con más stock con "
+                       "esa aseguradora y su peso. Otros: opciones y futuros. Filas grises: sin posición con BBVA. "
+                       "Nombres abreviados; el nombre legal está en el Excel.")
+
+    sin = t[t.bbva == 0]
+    con = t[t.bbva > 0]
+    b = t.iloc[::-1]
+    fig = _fig(max(300, 24 * len(b) + 80))
+    fig.add_bar(y=b.aseguradora, x=b.bbva, orientation="h", name="Con Grupo BBVA", marker_color=AZUL_MEDIO,
+                hovertemplate="<b>%{y}</b><br>Con BBVA: %{x:,.1f} MM USD<extra></extra>")
+    fig.add_bar(y=b.aseguradora, x=b.otros_bancos, orientation="h", name="Con otros bancos", marker_color=GRIS,
+                text=[f"{num(tt_, 0)}" + (f" · BBVA {pct(sb, 0)}" if sb > 0 else " · sin BBVA")
+                      for tt_, sb in zip(b.total, b.s_bbva)], textposition="outside", cliponaxis=False,
+                hovertemplate="<b>%{y}</b><br>Con otros bancos: %{x:,.1f} MM USD<extra></extra>")
+    fig.update_layout(barmode="stack", xaxis=dict(title="MM USD de nocional vigente", tickformat=",.0f",
+                                                  range=[0, t.total.max() * 1.3]),
+                      legend=dict(orientation="h", yanchor="bottom", y=1.01, x=0, traceorder="normal"),
+                      margin=dict(l=170, r=30, t=30, b=50))
+    hechos = [
+        f"{len(t)} aseguradoras tienen derivados vigentes; el Grupo BBVA tiene posición con {len(con)}.",
+        f"Las {len(sin)} aseguradoras sin BBVA suman {num(sin.total.sum(), 1)} MM USD "
+        f"({pct(sin.total.sum() / t.total.sum() * 100)} del stock). Las mayores: "
+        + ", ".join(f"{a} {num(x, 0)}" for a, x in zip(sin.aseguradora[:3], sin.total[:3])) + " MM USD.",
+        f"En las {len(con)} aseguradoras donde sí está, BBVA tiene {num(con.bbva.sum(), 1)} MM USD de "
+        f"{num(con.total.sum(), 1)} ({pct(con.bbva.sum() / con.total.sum() * 100)}); el resto, "
+        f"{num(con.otros_bancos.sum(), 1)} MM USD, está con otros bancos.",
+    ]
+    return {"tabla_aseg": tabla_aseg, "graf_aseg": html_fig(fig, "g_aseg"), "hechos_aseg": hechos, "_aseg": t}
 
 
 # ---------------------------------------------------------------------------
@@ -857,41 +1031,13 @@ def supervivencia(c: pd.DataFrame) -> pd.Series:
     return pd.Series(curva)
 
 
-def seccion_camadas(d: Datos, min_ops: int = 30) -> dict:
-    p = d.periodo
+def seccion_camadas(d: Datos) -> dict:
     res, cam = d.res, d.cam
     desde = mes_corto(res.mes_origen.min())
 
     def por_camada(f: str) -> pd.DataFrame:
         return (cam[cam.instrumento == f].groupby(["mes_origen", "meses"])
                 .agg(vivo=("vivo", "sum"), originado=("originado", "sum")).reset_index())
-
-    # resumen por instrumento (todas las camadas y subyacentes)
-    fam = []
-    for f in [x for x in FAMILIAS if x in set(res.instrumento)]:
-        r = res[res.instrumento == f]
-        curva = supervivencia(por_camada(f))
-        bajo = curva[curva < 50]
-        if r.operaciones.sum() < min_ops:
-            vida = f"n/d (menos de {min_ops} oper.)"
-        elif len(bajo):
-            k = int(bajo.index[0])
-            vida = f"{k} mes" if k == 1 else f"{k} meses"
-        else:
-            vida = f"más de {int(curva.index.max())} meses"
-        fam.append({"instrumento": NOMBRE_FAM[f], "ops": r.operaciones.sum(), "orig": r.originado.sum(),
-                    "vivas": r.ops_vivas.sum(), "vivo": r.vivo.sum(), "pct": r.vivo.sum() / r.originado.sum() * 100,
-                    "vida": vida})
-    fam = pd.DataFrame(fam)
-    tot = {"instrumento": "Total", "ops": fam.ops.sum(), "orig": fam.orig.sum(), "vivas": fam.vivas.sum(),
-           "vivo": fam.vivo.sum(), "pct": fam.vivo.sum() / fam.orig.sum() * 100, "vida": "", "_fila": "total"}
-    fam = pd.concat([fam, pd.DataFrame([tot])], ignore_index=True)
-    tabla_fam = tabla(fam, [("Instrumento", "instrumento", "txt"), ("Oper. originadas", "ops", "int"),
-                            ("Nocional originado", "orig", "mm"), ("Oper. vivas hoy", "vivas", "int"),
-                            ("Nocional vivo hoy", "vivo", "mm"), ("% vivo", "pct", "pct"),
-                            ("Vida mediana observada", "vida", "txt")], "compacta",
-                      f"MM USD, camadas {desde} a {mes_corto(p)}. Vida mediana: primer mes desde el origen en que la "
-                      "curva de supervivencia encadenada baja de 50%.")
 
     # un bloque por instrumento principal: su subyacente de mayor volumen
     claves = []
@@ -1008,9 +1154,9 @@ def seccion_camadas(d: Datos, min_ops: int = 30) -> dict:
              "previo": num(v[v.mes_origen < res.mes_origen.min()].nocional.sum() / v.nocional.sum() * 100, 1)}
 
     o_tot, v_tot = res.originado.sum(), res.vivo.sum()
-    return {"tabla_camadas_fam": tabla_fam, "bloques": bloques, "decaimiento": decaimiento, "libro": libro,
+    return {"bloques": bloques, "decaimiento": decaimiento, "libro": libro,
             "desde": desde, "orig_tot": num(o_tot, 1), "vivo_tot": num(v_tot, 1), "pct_tot": pct(v_tot / o_tot * 100),
-            "n_camadas": res.mes_origen.nunique(), "min_ops": min_ops}
+            "n_camadas": res.mes_origen.nunique()}
 
 
 # ---------------------------------------------------------------------------
@@ -1051,7 +1197,8 @@ def construir(xlsx: Path) -> tuple[str, Datos, dict]:
         "corte": f"{d.corte:%d-%m-%Y}", "mes": mes_corto(d.periodo), "periodo": d.periodo,
         "dolar": num(d.dolar, 2), "dolar_fecha": d.dolar_fecha, "publicacion": d.publicacion,
         "excel": d.excel.name, "generado": f"{_dt.datetime.now():%d-%m-%Y %H:%M}",
-        "resumen": r, "mercado": seccion_mercado(d), "flujo": seccion_flujo(d), "plazos": seccion_plazos(d),
+        "resumen": r, "mercado": seccion_mercado(d), "contrapartes": seccion_contrapartes(d),
+        "flujo": seccion_flujo(d), "plazos": seccion_plazos(d),
         "camadas": seccion_camadas(d),
         "controles": controles(d, r), "plotlyjs": Markup(get_plotlyjs()),
     }

@@ -12,6 +12,7 @@ from __future__ import annotations
 import datetime as _dt
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from reportes import datos as D
@@ -109,26 +110,40 @@ def hojas_instrumentos(ops: pd.DataFrame) -> list[Hoja]:
             MTM, TENOR] + C_OP + [ALERTA_OP],
         f("CCS"), total_etiqueta="Total CCS (fuera de la tabla)"))
 
-    promesa = f("Swap Promesa").copy()
-    promesa["breakeven"] = promesa.apply(D.breakeven_promesa, axis=1)
-    promesa["m_larga_n"], promesa["m_corta_n"] = _mon(promesa.m_larga), _mon(promesa.m_corta)
+    sw = f("Swap UF/CLP").copy()
+    sw["breakeven"] = sw.apply(D.breakeven_uf_clp, axis=1)
+    sw["m_larga_n"], sw["m_corta_n"] = _mon(sw.m_larga), _mon(sw.m_corta)
+    uf_larga = sw.m_larga_n == "UF"
+    tipo_uf = pd.Series(np.where(uf_larga, sw.pata_larga_tipo, sw.pata_corta_tipo), index=sw.index)
+    tipo_clp = pd.Series(np.where(uf_larga, sw.pata_corta_tipo, sw.pata_larga_tipo), index=sw.index)
+    legible = {"FIJA": "fija", "ICP": "Camara (ICP)"}
+    sw["estructura"] = ("UF " + tipo_uf.fillna("s/d").map(lambda t: legible.get(t, t)) + " vs pesos "
+                        + tipo_clp.fillna("s/d").map(lambda t: legible.get(t, t)))
+    sw["tasa_uf"] = pd.Series(np.where(uf_larga, sw.pata_larga_tasa, sw.pata_corta_tasa), index=sw.index).where(
+        tipo_uf == "FIJA")
     out.append(Hoja(
-        "Swap_Promesa", "tbl_swap_promesa", "Swaps promesa (UF contra pesos)",
-        "Swaps entre UF y pesos, para calzar inflacion y duracion. La inflacion breakeven solo aplica si ambas patas son fijas.",
+        "Swap_UF_CLP", "tbl_swap_uf_clp", "Swaps UF/CLP (inflacion: UF contra pesos)",
+        "Swaps de UF contra pesos: tasa fija en UF contra Camara (ICP) o contra pesos fijos. Calzan inflacion y "
+        "duracion entre pasivos en UF y activos en pesos. Incluye los que la CMF codifica como 'tasa o inflacion' "
+        "y como 'moneda'. La inflacion breakeven solo aplica si ambas patas son fijas.",
         C_ASEG + C_CP_OP + [
-            Col("Cruce", "subyacente", "texto", "Par de monedas, en orden canonico"),
-            Col("Instrumento informado", "instrumento", "texto", "Clasificacion del warehouse"),
-            Col("Direccion", "direccion", "texto", "Paga fija, recibe fija o fija contra fija"),
+            Col("Cruce", "subyacente", "texto", "Par de monedas, en orden canonico (siempre UF/CLP)"),
+            Col("Estructura", "estructura", "texto",
+                "Pata UF y pata pesos: 'UF fija vs pesos Camara (ICP)' es el swap UF-Camara (fijo en UF contra "
+                "flotante en pesos); 'UF fija vs pesos fija' es fijo-fijo"),
+            Col("Instrumento informado", "instrumento", "texto", "Clasificacion del warehouse a partir del anexo"),
+            Col("Direccion", "direccion", "texto", "Paga fija, recibe fija o fija contra fija, desde la aseguradora"),
+            Col("Tasa UF fija (%)", "tasa_uf", "tasa", "Tasa de la pata UF cuando es fija, % anual en UF"),
             Col("Moneda pata larga", "m_larga_n", "texto", "Moneda de la pata activa"),
             Col("Tasa pata larga (%)", "pata_larga_tasa", "tasa", "Tasa de la pata activa, % anual"),
             Col("Moneda pata corta", "m_corta_n", "texto", "Moneda de la pata pasiva"),
             Col("Tasa pata corta (%)", "pata_corta_tasa", "tasa", "Tasa de la pata pasiva, % anual"),
             Col("Indice flotante", "indice_flotante", "texto", "Indice de la pata flotante, si la hay"),
             Col("Inflacion breakeven (%)", "breakeven", "pct",
-                "(1 + tasa pesos) / (1 + tasa UF) - 1, solo si ambas patas son fijas y son UF y pesos. Una pata "
-                "en 0% es plana y se calcula; ambas en 0% es un contrato no informado y queda vacio"),
+                "(1 + tasa pesos) / (1 + tasa UF) - 1, solo si ambas patas son fijas. Una pata en 0% es plana y se "
+                "calcula; ambas en 0% es un contrato no informado y queda vacio"),
             NOC, MTM, TENOR] + C_OP + [ALERTA_OP],
-        promesa, total_etiqueta="Total swaps promesa (fuera de la tabla)"))
+        sw, total_etiqueta="Total swaps UF/CLP (fuera de la tabla)"))
 
     fx = f("Forward FX").copy()
     fx["operacion"] = fx.apply(D.direccion_fwd, axis=1)
@@ -583,7 +598,7 @@ def generar(periodo: int | None = None, salida: Path | None = None) -> Path:
                                                       "cuanto sigue vivo hoy"),
            ("Camadas", "tbl_camadas", "Supervivencia de cada camada mes a mes (nocional vivo sobre el originado)"),
            ("CCS", "tbl_ccs", "Detalle tailor-made: cross currency swaps"),
-           ("Swap_Promesa", "tbl_swap_promesa", "Detalle tailor-made: swaps UF contra pesos"),
+           ("Swap_UF_CLP", "tbl_swap_uf_clp", "Detalle tailor-made: swaps UF contra pesos (inflacion)"),
            ("Forward_FX", "tbl_forward_fx", "Detalle tailor-made: forwards de moneda"),
            ("Forward_UF", "tbl_forward_uf", "Detalle tailor-made: forwards de inflacion"),
            ("IRS", "tbl_irs", "Detalle tailor-made: swaps de tasa"),
@@ -626,10 +641,15 @@ def generar(periodo: int | None = None, salida: Path | None = None) -> Path:
         "cambio ni amortizaciones parciales. Viva = sigue informada en la foto. No se observa lo que se origina y "
         "vence dentro del mismo mes, y las camadas anteriores a Dic-2024 quedan fuera (no se ve su volumen inicial). "
         "Clasificacion y contraparte: las de la ultima foto, igual que el stock; lo pactado: de la primera.",
-        "Tasa al pactar (Camadas_Resumen y hojas CCS, Swap_Promesa, IRS, Forward_FX, Forward_UF): CCS, diferencial "
+        "Instrumentos de derivados: CCS = swap con al menos una moneda extranjera (UF/USD, UF/EUR, USD/CLP...). "
+        "Swap UF/CLP = swap de UF contra pesos: tasa fija en UF contra Camara (ICP) o contra pesos fijos; calza "
+        "inflacion y duracion (la CMF lo codifica como 'tasa o inflacion' o como 'moneda'; antes se rotulaba 'swap "
+        "promesa'). IRS = swap de tasa en una sola moneda: pesos fijos contra Camara (ICP) o USD fijo contra SOFR. "
+        "Forward FX = forward de divisa contra pesos. Forward UF = forward de UF contra pesos.",
+        "Tasa al pactar (Camadas_Resumen y hojas CCS, Swap_UF_CLP, IRS, Forward_FX, Forward_UF): CCS, diferencial "
         "compuesto entre patas fijas, (1 + tasa moneda 1) / (1 + tasa moneda 2) - 1 en pb (UF contra USD en un "
         "UF/USD): es la metrica que no cambia con la convencion de reporte (tasa por pata o pata USD plana en 0%). "
-        "Swap promesa: inflacion breakeven. IRS: tasa fija. Forward de moneda: tipo de cambio pactado. Forward UF: "
+        "Swap UF/CLP: inflacion breakeven. IRS: tasa fija. Forward de moneda: tipo de cambio pactado. Forward UF: "
         "inflacion implicita contra la UF del dia de la operacion. Promedios ponderados por nocional originado, "
         "solo dentro de un mismo instrumento y subyacente.",
         "En ene-2026 Seguros Vida Security Prevision deja de informar y BICE Vida sube en un monto "

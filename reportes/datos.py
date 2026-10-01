@@ -49,7 +49,7 @@ CLASES = ["Renta Fija", "Equity", "ETF", "Fondos de Inversion", "Fondos Mutuos",
           "Real Estate", "Otros", "Derivados (valor razonable neto)", "Sin clasificar"]
 
 #: Familias de derivado con hoja propia, en orden de presentacion.
-FAMILIAS = ["CCS", "Swap Promesa", "Forward FX", "Forward UF", "IRS", "Opcion", "Futuro"]
+FAMILIAS = ["CCS", "Swap UF/CLP", "Forward FX", "Forward UF", "IRS", "Opcion", "Futuro"]
 
 _MESES = ("ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic")
 
@@ -266,7 +266,10 @@ def comparativa(ctx: Contexto) -> tuple[pd.DataFrame, pd.DataFrame]:
 def _familia(instrumento: str | None) -> str:
     i = str(instrumento or "")
     if "swap promesa" in i:
-        return "Swap Promesa"
+        # Etiqueta del warehouse para lo que la CMF codifica como "tasa o
+        # inflacion" con patas en monedas distintas. No es un nombre de
+        # mercado: _clasificar decide por las monedas (UF/CLP o CCS).
+        return "Swap UF/CLP"
     if i.startswith("CCS"):
         return "CCS"
     if i.startswith("Forward FX"):
@@ -308,7 +311,7 @@ def _par(a, b) -> str:
 
 def _subyacente(r) -> str:
     f = r["familia"]
-    if f in ("CCS", "Swap Promesa"):
+    if f in ("CCS", "Swap UF/CLP"):
         par = str(r["instrumento"]).replace("CCS ", "").replace(" (swap promesa)", "")
         return _par(*par.split("/")) if "/" in par else par
     if f in ("Forward FX", "Forward UF"):
@@ -332,6 +335,12 @@ def _clasificar(df: pd.DataFrame) -> pd.DataFrame:
     # Forward UF, donde aplica la inflacion implicita. La etiqueta original
     # queda en `instrumento`.
     df.loc[(df.familia == "Forward FX") & (df.subyacente == "UF/CLP"), "familia"] = "Forward UF"
+    # Swap UF/CLP = todo swap de UF contra pesos (fija UF contra Camara, o
+    # fijo-fijo: un swap de inflacion), lo codifique la CMF como "tasa o
+    # inflacion" o como "moneda". CCS = swap con al menos una moneda
+    # extranjera. Asi un UF/USD que el warehouse rotulaba "swap promesa" es CCS.
+    swap = df.familia.isin(["CCS", "Swap UF/CLP"])
+    df.loc[swap, "familia"] = np.where(df.loc[swap, "subyacente"] == "UF/CLP", "Swap UF/CLP", "CCS")
     return df
 
 
@@ -442,8 +451,8 @@ def calidad_contrapartes(df: pd.DataFrame) -> pd.DataFrame:
 #  metricas propias de cada instrumento
 # ---------------------------------------------------------------------------
 
-def breakeven_promesa(r) -> float:
-    """Inflacion implicita de un swap promesa fijo-fijo UF contra CLP.
+def breakeven_uf_clp(r) -> float:
+    """Inflacion implicita de un swap UF/CLP fijo-fijo.
 
     (1 + tasa CLP) / (1 + tasa UF) - 1, con la tasa de cada pata identificada
     por su moneda. Solo tiene sentido si ambas patas son fijas y son UF y CLP.
@@ -453,7 +462,7 @@ def breakeven_promesa(r) -> float:
     patas = {_mon(r.get("m_larga")): r.get("pata_larga_tasa"), _mon(r.get("m_corta")): r.get("pata_corta_tasa")}
     if set(patas) != {"UF", "CLP"} or any(pd.isna(v) for v in patas.values()):
         return np.nan
-    # Una pata en cero es una pata PLANA, estructura habitual del swap promesa:
+    # Una pata en cero es una pata PLANA, estructura habitual del swap UF/CLP:
     # "pesos 0% contra UF -2,8%" da un breakeven de 2,88%, y "UF 0% contra pesos
     # 2,99%" uno de 2,99%. Solo AMBAS en cero es un contrato no informado (hay
     # uno asi): ahi el breakeven daria 0% exacto, un numero falso con cara de dato.
@@ -838,7 +847,7 @@ def detalle_otras(ctx: Contexto, periodo: int | None = None) -> pd.DataFrame:
 #:                es exactamente la tasa UF cuando la pata USD es plana, y deja
 #:                ~10 pb entre convenciones a igual plazo (la resta simple
 #:                dejaba ~25).
-#:   Swap Promesa Inflacion breakeven: (1 + tasa pesos) / (1 + tasa UF) - 1,
+#:   Swap UF/CLP  Inflacion breakeven: (1 + tasa pesos) / (1 + tasa UF) - 1,
 #:                solo fija contra fija.
 #:   IRS          Tasa fija.
 #:   Forward FX   Tipo de cambio forward pactado (CLP por unidad de la divisa),
@@ -852,7 +861,7 @@ def detalle_otras(ctx: Contexto, periodo: int | None = None) -> pd.DataFrame:
 #:                ~18% anualizado a 40 dias, con la UF efectivamente subiendo
 #:                1,6% en ese plazo); menos de DIAS_MIN_FWD dias queda fuera.
 METRICA_TASA = {"CCS": "Diferencial de tasas moneda 1 vs moneda 2 del cruce (pb)",
-                "Swap Promesa": "Inflacion breakeven (%)",
+                "Swap UF/CLP": "Inflacion breakeven (%)",
                 "IRS": "Tasa fija (%)",
                 "Forward FX": "Tipo de cambio forward pactado (CLP por unidad de divisa)",
                 "Forward UF": "Inflacion implicita al pactar (% anual)"}
@@ -895,9 +904,9 @@ def metrica_tasa(ops: pd.DataFrame) -> pd.Series:
     t1, t2 = np.where(ml == primera, tl, tco), np.where(ml == primera, tco, tl)
     m[ccs] = (((1 + t1 / 100) / (1 + t2 / 100) - 1) * 1e4)[ccs.values]
 
-    pr = ops.familia == "Swap Promesa"
+    pr = ops.familia == "Swap UF/CLP"
     if pr.any():
-        m[pr] = ops[pr].apply(breakeven_promesa, axis=1)
+        m[pr] = ops[pr].apply(breakeven_uf_clp, axis=1)
 
     irs = ops.familia == "IRS"
     m[irs] = pd.to_numeric(ops.tasa_fija, errors="coerce")[irs]
@@ -921,7 +930,7 @@ def historia_operaciones(ctx: Contexto) -> tuple[pd.DataFrame, list[int]]:
     PRIMERA foto en que aparece la operacion. La clasificacion, la contraparte
     y las fechas salen de la ULTIMA, igual que en el stock del periodo: si la
     aseguradora corrigio lo que informa, vale lo corregido (18 operaciones
-    pasaron de CCS a swap promesa entre fotos).
+    cambiaron de instrumento entre fotos).
     """
     pers = periodos_disponibles(ctx)
     h = ctx.con.execute(f"""

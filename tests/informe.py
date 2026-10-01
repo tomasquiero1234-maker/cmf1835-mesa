@@ -8,6 +8,7 @@ un camino INDEPENDIENTE (pandas por hoja, no el lector por nombre del informe):
   2. salidas: HTML con sus 5 secciones y sus graficos, PDF A4 apaisado;
   3. stock al corte: detalle = Evol_Deriv_Grupo = informe, grupo por grupo;
   4. todo ranking es top 5 + Grupo BBVA con su puesto real, y suma el total;
+     todas las aseguradoras y las subsidiarias suman el stock;
   5. tramos de plazo: cada operacion del mes cae en exactamente un tramo;
   6. camadas: originado = originacion mensual, vivo <= originado, nunca sube
      entre fotos, y lo vivo en la ultima foto = lo vivo hoy del resumen;
@@ -35,7 +36,7 @@ import pandas as pd  # noqa: E402
 from reportes import informe as I  # noqa: E402
 
 FALLAS: list[str] = []
-HOJAS_DERIV = {"CCS": "CCS", "Swap Promesa": "Swap_Promesa", "Forward FX": "Forward_FX", "Forward UF": "Forward_UF",
+HOJAS_DERIV = {"CCS": "CCS", "Swap UF/CLP": "Swap_UF_CLP", "Forward FX": "Forward_FX", "Forward UF": "Forward_UF",
                "IRS": "IRS", "Opcion": "Opciones", "Futuro": "Futuros"}
 
 
@@ -96,7 +97,8 @@ def main(argv: list[str] | None = None) -> int:
     det = []
     for fam, nombre in HOJAS_DERIV.items():
         t = hoja(xlsx, nombre)
-        det.append(pd.DataFrame({"familia": fam, "grupo": t["Grupo contraparte"],
+        det.append(pd.DataFrame({"familia": fam, "grupo": t["Grupo contraparte"], "aseg": t["Aseguradora"],
+                                 "id": t["ID legal contraparte"],
                                  "noc": pd.to_numeric(t["Nocional (MM USD)"]),
                                  "fo": pd.to_datetime(t["Fecha operacion"]),
                                  "plazo": pd.to_numeric(t["Plazo original (dias)"])}))
@@ -145,6 +147,33 @@ def main(argv: list[str] | None = None) -> int:
         "Nocional originado (MM USD)"].sum().sort_values(ascending=False)
     check(int(b12["rank"].iloc[0]) == list(o12.index).index(I.GRUPO_BBVA) + 1,
           f"Grupo BBVA en la originacion de 12 meses: puesto {int(b12['rank'].iloc[0])} de {len(o12)}")
+
+    print("\n[4b] todas las aseguradoras y stock por subsidiaria")
+    mer = I.seccion_mercado(d)
+    ag = mer["_aseg"]
+    con_b = set(det[det.grupo == I.GRUPO_BBVA].aseg)
+    check(len(ag) == det.aseg.nunique() and abs(ag.total.sum() - stock_det.sum()) < 1e-6
+          and (ag.bbva + ag.otros_bancos - ag.total).abs().max() < 1e-9 and int((ag.bbva > 0).sum()) == len(con_b),
+          f"{len(ag)} aseguradoras, suman el stock; con BBVA {len(con_b)}; con BBVA + con otros bancos = total")
+    sin_b = det[~det.aseg.isin(con_b)].noc.sum()
+    check(abs(ag[ag.bbva == 0].total.sum() - sin_b) < 1e-6,
+          f"stock de las aseguradoras sin BBVA: {sin_b:,.1f} MM USD, recalculado desde el detalle")
+    cp = I.seccion_contrapartes(d)["_tabla"]
+    grupos = cp[cp._fila.isin(["grupo", "grupo-bbva"])]
+    subs = cp[cp._fila == "sub"]
+    check(abs(grupos.stock.sum() - stock_det.sum()) < 1e-6 and len(grupos) == det.grupo.nunique(),
+          f"{len(grupos)} grupos: sus filas suman el stock")
+    ok_sub = True
+    for gi in grupos.index:
+        siguientes = cp.loc[gi + 1:]
+        fin = siguientes.index[siguientes._fila != "sub"]
+        hijos = cp.loc[gi + 1: (fin[0] - 1) if len(fin) else cp.index[-1]]
+        hijos = hijos[hijos._fila == "sub"]
+        if len(hijos) and abs(hijos.stock.sum() - cp.loc[gi, "stock"]) > 1e-6:
+            ok_sub = False
+    n_ent = len(subs) + int((~grupos.entidad.str.endswith("entidades legales")).sum())
+    check(ok_sub and n_ent == det.id.nunique(),
+          f"las subsidiarias suman su grupo y son {n_ent} entidades legales, una por RUT o LEI")
 
     print("\n[5] tramos de plazo")
     tr = I.seccion_plazos(d)["_tramos"]
